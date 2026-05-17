@@ -1,0 +1,12 @@
+.env
+
+# Ambienti virtuali Python
+.venv/
+venv/
+env/
+
+# File temporanei e di cache
+__pycache__/
+*.pyc
+.langgraph_api/
+.DS_Store

@@ -1,0 +1,10 @@
+langchain
+langgraph
+langchain-community
+langchain-google-genai
+langchain-groq
+langchain-tavily
+python-dotenv
+langsmith
+pydantic
+youtube-transcript-api
