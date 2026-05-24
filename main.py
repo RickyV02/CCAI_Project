@@ -1,4 +1,5 @@
 import os
+import uuid
 from dotenv import load_dotenv
 from agent_graph import graph
 from langgraph.types import Command
@@ -13,10 +14,10 @@ def main():
     print(" Avvio Agentic AI - Blogger Videoludico")
     print("====================================\n")
 
-    config = {"configurable": {"thread_id": "blog-session-1"}}
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
     initial_state = {
-        "user_input": "Scrivi una recensione del DLC di Elden Ring",
+        "user_input": "Vogliamo fare un nuovo articolo su Elden Ring. Controlla cosa abbiamo già pubblicato in passato e proponi un format diverso per non ripeterci.",
         "reasoning_trace": [],
         "tool_outputs": {},
         "kg_summaries": "",
@@ -30,7 +31,11 @@ def main():
     print("Esecuzione in corso...\n")
 
     # Prima esecuzione — si ferma prima di human_review
-    result = graph.invoke(initial_state, config)
+    try:
+        result = graph.invoke(initial_state, config)
+    except Exception as e:
+        print(f"Errore durante l'esecuzione del grafo: {e}")
+        return
 
     # Loop feedback
     while True:

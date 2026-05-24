@@ -10,3 +10,8 @@ __pycache__/
 *.pyc
 .langgraph_api/
 .DS_Store
+
+#Persistenza e cache varia
+chroma_db
+hf_cache/
+*.db

@@ -1,7 +1,13 @@
-{
+﻿{
   "dependencies": ["."],
   "graphs": {
     "agent": "./agent_graph.py:graph"
   },
-  "env": ".env"
+  "env": ".env",
+  "mcp_servers": {
+    "neo4j": {
+      "command": "neo4j-mcp-server",
+      "args": []
+    }
+  }
 }

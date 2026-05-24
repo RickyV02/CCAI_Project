@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import TypedDict, Any
 
 class AgentState(TypedDict):
     """
@@ -6,9 +6,9 @@ class AgentState(TypedDict):
     """
     user_input: str #Input di partenza dell'utente
     reasoning_trace: list[str] # Ogni volta che un nodo del grafo viene eseguito, aggiungiamo una stringa che rappresenta l'azione eseguita e il risultato ottenuto (Explainability)
-    tool_outputs: dict[str, any] # Per ogni tool utilizzato, memorizziamo il suo output
+    tool_outputs: dict[str, Any] # Per ogni tool utilizzato, memorizziamo il suo output
     kg_summaries: str
-    planning_information: dict[str, any] # Risultati del planner node
+    planning_information: dict[str, Any] # Risultati del planner node
     draft_post: str #L'articolo generato fino a quel momento
     human_feedback: str # Feedback dell'utente sulla bozza
     post_type: str # Tipo di post da generare

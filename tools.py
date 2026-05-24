@@ -5,27 +5,56 @@ import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq as _ChatGroq
 from pydantic import BaseModel, Field
-
-class ArticleSummary(BaseModel):
-    """Schema per il riassunto strutturato di un articolo di gaming."""
-    summary: str = Field(description="Riassunto dei fatti principali: trama, meccaniche, impressioni generali.")
-    key_facts: str = Field(description="Fatti concreti e specifici: nomi esatti di boss, aree, armi, meccaniche, voti numerici, pro e contro.")
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from rag_manager import RAGManager
+from kg_manager import KGManager
 
 load_dotenv()
 
-# Nelle prossime fasi di sviluppo, questi tool saranno implementati in maniera procedurale con logiche reali.
+# Instanziazione del RAGManager (database vettoriale locale Chroma)
+rag_instance = RAGManager()
 
-search_tool = TavilySearch(max_results=5, include_raw_content=False)
+# Instanziazione del KGManager (database a grafo remoto/locale Neo4j)
+kg_instance = KGManager()
+
+@tool
+def search_tool(query: str) -> str:
+    """Ricerca sul web informazioni aggiornate. Scarica il contenuto completo dei siti trovati e li salva nel database vettoriale locale per permettere ricerche di dettaglio."""
+    try:
+        tavily = TavilySearch(max_results=3, include_raw_content=True)
+        results = tavily.invoke({"query": query})
+
+        combined_text = ""
+        for res in results:
+            if isinstance(res, dict):
+                content = res.get("raw_content") or res.get("content") or ""
+            else:
+                content = getattr(res, 'page_content', str(res))
+
+            if content:
+                combined_text += content + "\n\n"
+
+        if not combined_text.strip():
+            return "Nessun risultato utile trovato sul web."
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        chunks = splitter.split_text(combined_text)
+
+        rag_instance.add_texts(chunks)
+
+        return "Ricerca web completata. I contenuti completi dei siti sono stati scaricati e salvati nel database vettoriale locale (ChromaDB). Usa IMMEDIATAMENTE il tool 'rag_retrieval_tool' facendo query specifiche per estrarre i dettagli che ti servono."
+    except Exception as e:
+        return f"Errore durante la ricerca web: {e}"
 
 @tool
 def rag_retrieval_tool(query: str) -> str:
-    """Mock di ricerca nei documenti locali (RAG)."""
-    return f"Estratto dal database dei documenti per: {query}"
+    """Search the local knowledge base for game mechanics, lore, internal blog guidelines, and past reviews. Use this tool BEFORE searching the web if you need to know deep factual mechanics of a game we already documented."""
+    return rag_instance.retrieve(query)
 
 @tool
 def knowledge_graph_tool(entity: str) -> str:
-    """Mock per la ricerca di entità nel Knowledge Graph."""
-    return f"Informazioni dal KG per l'entità: {entity}"
+    """Search the internal Knowledge Graph for structured relationships and entities (e.g. characters, developers, past covered topics). Use this to avoid factual errors regarding game relationships."""
+    return kg_instance.query(entity)
 
 @tool
 def videogame_api_fetcher(game_name: str) -> str:
@@ -45,7 +74,7 @@ def llm_quality_judge(text: str) -> str:
 
 @tool
 def youtube_transcript_fetcher(video_url: str) -> str:
-    """Recupera e riassume la trascrizione completa di un video YouTube dato il suo URL."""
+    """Recupera la trascrizione completa di un video YouTube dato il suo URL e la salva nel database vettoriale locale."""
     try:
         if "v=" in video_url:
             video_id = video_url.split("v=")[1].split("&")[0]
@@ -56,67 +85,15 @@ def youtube_transcript_fetcher(video_url: str) -> str:
 
         ytt = YouTubeTranscriptApi()
         transcript_data = ytt.fetch(video_id)
-        testo_intero = " ".join([t.text for t in transcript_data])
+        raw_text = " ".join([t.text for t in transcript_data])
 
-        # Se il testo è breve, lo restituiamo direttamente
-        if len(testo_intero) <= 8000:
-            return f"<youtube_transcript>\n{testo_intero}\n</youtube_transcript>"
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        chunks = splitter.split_text(raw_text)
 
-        # Altrimenti usiamo Map-Reduce per ridurne la dimensione
-        llm_fast = _ChatGroq(model="llama-3.1-8b-instant", temperature=0.0) # Potremmo metterlo come tool (sistema multi-agent)
-        chunk_size = 8000
-        chunks = [testo_intero[i:i+chunk_size] for i in range(0, len(testo_intero), chunk_size)]
+        rag_instance.add_texts(chunks)
 
-        chunk_summaries = []
-        for chunk in chunks:
-            prompt = f"""Estrai i fatti concreti gaming da questa trascrizione video:
-            nomi di boss, aree, armi, meccaniche, opinioni del creator, voti.
-            Testo: {chunk}
-            Massimo 150 parole."""
-            summary = llm_fast.invoke(prompt).content
-            chunk_summaries.append(summary)
-
-        if len(chunk_summaries) > 1:
-            final_prompt = f"""Unisci questi riassunti in un unico testo coerente.
-            Elimina i duplicati. Massimo 300 parole.
-            {chr(10).join(chunk_summaries)}"""
-            return f"<youtube_transcript>\n{llm_fast.invoke(final_prompt).content}\n</youtube_transcript>"
-
-        return f"<youtube_transcript>\n{chunk_summaries[0]}\n</youtube_transcript>"
+        word_count = len(raw_text.split())
+        return f"Trascrizione completa ({word_count} parole) scaricata e salvata con successo nel database vettoriale locale (ChromaDB). Per leggere le informazioni, utilizza IMMEDIATAMENTE il tool 'rag_retrieval_tool' facendo query specifiche su ciò che stai cercando."
 
     except Exception as e:
         return f"Impossibile estrarre la trascrizione: {e}"
-
-@tool
-def article_summarizer(raw_text: str, topic: str) -> str:
-    """Riassume un articolo lungo estraendo fatti concreti gaming: boss, aree, armi, meccaniche, voti, pro e contro. Usalo per processare raw content lungo prima di passarlo al writer."""
-    try:
-        llm_fast = _ChatGroq(model="llama-3.1-8b-instant", temperature=0.0) # Come per i video di yt, questo potremmo metterlo come tool (quindi creare un tool che fa riassunti di testo, rimuovendo la stessa logica da entrambi i tool e centralizzandola in un unico tool di summarization multi-purpose).
-        #In questo modo potremmo usarlo anche per riassumere i contenuti lunghi recuperati dal rag_retrieval_tool o dal knowledge_graph_tool, se necessario.
-
-        structured_summarizer = llm_fast.with_structured_output(ArticleSummary)
-
-        chunk_size = 8000
-        chunks = [raw_text[i:i+chunk_size] for i in range(0, len(raw_text), chunk_size)]
-
-        all_summaries = []
-        all_facts = []
-
-        for chunk in chunks:
-            try:
-                result = structured_summarizer.invoke(
-                    f"Analizza questo testo gaming relativo a '{topic}' ed estrai un riassunto e i fatti concreti specifici: nomi esatti di boss, aree, armi, meccaniche, voti numerici, pro e contro.\n\nTesto:\n{chunk}"
-                )
-                all_summaries.append(result.summary)
-                all_facts.append(result.key_facts)
-            except Exception:
-                all_summaries.append("")
-                all_facts.append("")
-
-        combined_summary = " ".join([s for s in all_summaries if s])
-        combined_facts = "\n".join([f for f in all_facts if f])
-
-        return f"<summary>\n{combined_summary}\n</summary>\n\n<key_facts>\n{combined_facts}\n</key_facts>"
-
-    except Exception as e:
-        return f"Errore summarizer: {e}"
