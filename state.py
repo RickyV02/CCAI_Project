@@ -1,15 +1,19 @@
-from typing import TypedDict, Any
+import operator
+from typing import Any, Annotated
+from typing_extensions import TypedDict
+
 
 class AgentState(TypedDict):
     """
-    Rappresenta lo stato del grafo.
+    Stato condiviso tra tutti i nodi del grafo.
     """
-    user_input: str #Input di partenza dell'utente
-    reasoning_trace: list[str] # Ogni volta che un nodo del grafo viene eseguito, aggiungiamo una stringa che rappresenta l'azione eseguita e il risultato ottenuto (Explainability)
-    tool_outputs: dict[str, Any] # Per ogni tool utilizzato, memorizziamo il suo output
-    kg_summaries: str
-    planning_information: dict[str, Any] # Risultati del planner node
-    draft_post: str #L'articolo generato fino a quel momento
-    human_feedback: str # Feedback dell'utente sulla bozza
-    post_type: str # Tipo di post da generare
-    post_history: list[dict] # Storico dei post generati
+    user_input: str                                        # Input dell'utente (gioco o richiesta suggerimento)
+    reasoning_trace: Annotated[list[dict], operator.add]   # Trace strutturata Thought/Action/Observation
+    tool_outputs: dict[str, Any]                           # Output grezzi dei tool {tool_name: [results]}
+    kg_context: str                                        # Summaries dal Knowledge Graph
+    planning_information: dict[str, Any]                   # Piano editoriale dal planner
+    research_summary: str                                  # Estrazione strutturata dal summarizer
+    draft_post: str                                        # Bozza della review
+    human_feedback: str                                    # Feedback dell'utente
+    quality_passed: bool                                   # Risultato quality check
+    revision_count: int                                    # Contatore revisioni automatiche

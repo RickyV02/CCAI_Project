@@ -1,0 +1,74 @@
+import json
+import re
+
+
+def create_react_entry(node: str, thought: str, action: str, observation: str) -> dict:
+    """Crea un entry strutturata per la reasoning trace ReAct."""
+    return {
+        "node": node,
+        "thought": thought,
+        "action": action,
+        "observation": observation
+    }
+
+
+def parse_llm_json(text: str) -> dict:
+    """Parsing robusto di JSON da output LLM con pulizia markdown."""
+    cleaned = text.strip()
+    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r'\{[^{}]*\}', cleaned, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+
+def format_extraction_for_writer(extraction) -> str:
+    """Converte un GameResearchExtraction in testo formattato per il writer."""
+    sections = []
+
+    if extraction.lore_and_story_details:
+        sections.append(f"## LORE E STORIA\n{extraction.lore_and_story_details}")
+
+    if extraction.gameplay_and_mechanics_deep_dive:
+        sections.append(f"\n## GAMEPLAY E MECCANICHE\n{extraction.gameplay_and_mechanics_deep_dive}")
+
+    if extraction.bosses_mentioned:
+        sections.append(f"\n## BOSS MENZIONATI\n{', '.join(extraction.bosses_mentioned)}")
+
+    if extraction.difficulty_notes:
+        sections.append(f"Difficoltà: {extraction.difficulty_notes}")
+
+    if extraction.graphics_audio_notes:
+        sections.append(f"\n## ASPETTI TECNICI E ARTISTICI\n{extraction.graphics_audio_notes}")
+
+    if extraction.release_info:
+        sections.append(f"\n## INFO RILASCIO E SVILUPPO\n{extraction.release_info}")
+
+    if extraction.scores_ratings:
+        sections.append(f"\n## VOTI CRITICI\n{', '.join(extraction.scores_ratings)}")
+
+    if extraction.fact_check_notes:
+        sections.append(f"\n## ⚠️ NOTE FACT-CHECK\n{extraction.fact_check_notes}")
+
+    if extraction.sources:
+        sections.append(f"\n## FONTI")
+        for s in extraction.sources:
+            if s.is_relevant:
+                sections.append(f"- [{s.name}]({s.url}) [Credibilità: {s.credibility}] — {s.key_info}")
+
+    return "\n".join(sections)
+
+
+def truncate_text(text: str, max_chars: int = 500) -> str:
+    """Tronca il testo a max_chars caratteri mantenendo parole intere."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars].rsplit(' ', 1)[0]
+    return truncated + "..."

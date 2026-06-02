@@ -1,80 +1,154 @@
 from langchain.tools import tool
 from langchain_tavily import TavilySearch
 from youtube_transcript_api import YouTubeTranscriptApi
-import os
-from dotenv import load_dotenv
-from langchain_groq import ChatGroq as _ChatGroq
-from pydantic import BaseModel, Field
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 from rag_manager import RAGManager
 from kg_manager import KGManager
+import os
+import re
+from bs4 import BeautifulSoup
 
-load_dotenv()
+RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1000"))
+RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "100"))
 
-# Instanziazione del RAGManager (database vettoriale locale Chroma)
-rag_instance = RAGManager()
+rag_manager = RAGManager()
+kg_manager = KGManager()
 
-# Instanziazione del KGManager (database a grafo remoto/locale Neo4j)
-kg_instance = KGManager()
 
 @tool
 def search_tool(query: str) -> str:
-    """Ricerca sul web informazioni aggiornate. Scarica il contenuto completo dei siti trovati e li salva nel database vettoriale locale per permettere ricerche di dettaglio."""
+    """
+    Esegue una ricerca web usando Tavily. Usa questo tool per trovare su internet news, recensioni o guide recenti.
+
+    Args:
+        query (str): La stringa esatta di ricerca da inviare al motore. Inserisci SOLO la query.
+    """
     try:
         tavily = TavilySearch(max_results=3, include_raw_content=True)
-        results = tavily.invoke({"query": query})
+        search_query = f"{query}"
+        results = tavily.invoke({"query": search_query})
 
-        combined_text = ""
-        for res in results:
+        all_documents = []
+        sources_found = []
+
+        results_list = results.get("results", []) if isinstance(results, dict) else results
+
+        for res in results_list:
             if isinstance(res, dict):
-                content = res.get("raw_content") or res.get("content") or ""
+                raw = res.get("raw_content", "")
+                if raw:
+                    soup = BeautifulSoup(raw, "html.parser")
+                    content = soup.get_text(separator=' ', strip=True)
+                else:
+                    content = res.get("content", "")
+
+                url = res.get("url", "")
+                title = res.get("title", "Fonte web")
             else:
                 content = getattr(res, 'page_content', str(res))
+                url = ""
+                title = "Fonte web"
 
-            if content:
-                combined_text += content + "\n\n"
+            content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+            content = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', content)
+            content = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', content)
 
-        if not combined_text.strip():
-            return "Nessun risultato utile trovato sul web."
+            if not content.strip():
+                continue
 
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-        chunks = splitter.split_text(combined_text)
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP
+            )
+            chunks = splitter.split_text(content)
 
-        rag_instance.add_texts(chunks)
+            for i, chunk in enumerate(chunks):
+                doc = Document(
+                    page_content=chunk,
+                    metadata={
+                        "source_url": url,
+                        "source_name": title,
+                        "source_type": "web",
+                        "topic": query,
+                        "chunk_index": i,
+                        "total_chunks": len(chunks),
+                    }
+                )
+                all_documents.append(doc)
 
-        return "Ricerca web completata. I contenuti completi dei siti sono stati scaricati e salvati nel database vettoriale locale (ChromaDB). Usa IMMEDIATAMENTE il tool 'rag_retrieval_tool' facendo query specifiche per estrarre i dettagli che ti servono."
+            if url:
+                sources_found.append(f"{title} ({url})")
+
+        added = rag_manager.add_documents(all_documents)
+        sources_str = ", ".join(sources_found) if sources_found else "nessuna fonte trovata"
+        return f"Ricerca web completata. {added} chunk salvati da {len(sources_found)} fonti: {sources_str}. Usa 'rag_retrieval_tool' per leggere i dettagli."
+
     except Exception as e:
         return f"Errore durante la ricerca web: {e}"
 
+
 @tool
 def rag_retrieval_tool(query: str) -> str:
-    """Search the local knowledge base for game mechanics, lore, internal blog guidelines, and past reviews. Use this tool BEFORE searching the web if you need to know deep factual mechanics of a game we already documented."""
-    return rag_instance.retrieve(query)
+    """
+    Esegue una ricerca semantica nei documenti testuali e articoli scaricati in locale (ChromaDB).
+
+    Args:
+        query (str): La frase o domanda da cercare nei documenti locali (es. "Come funziona il combat system?").
+    """
+    return rag_manager.retrieve(query)
+
 
 @tool
 def knowledge_graph_tool(entity: str) -> str:
-    """Search the internal Knowledge Graph for structured relationships and entities (e.g. characters, developers, past covered topics). Use this to avoid factual errors regarding game relationships."""
-    return kg_instance.query(entity)
+    """
+    Interroga il database interno Knowledge Graph (Neo4j) per vedere se un argomento è già noto al blog.
+
+    Args:
+        entity_name (str): Il nome specifico e preciso del soggetto da cercare (es. "Malenia", "Parry", "FromSoftware"). Inserisci SOLO il nome, senza preposizioni o frasi.
+    """
+    return kg_manager.query(entity)
+
 
 @tool
-def videogame_api_fetcher(game_name: str) -> str:
-    """Mock di una chiamata API (es. IGDB) per recuperare dati fattuali su un videogioco. Per adesso è un placeholder"""
-    return f"Dati API: {game_name} ha venduto 1M di copie, voto Metacritic 90/100."
+def deep_read_article(source_url: str, offset: int | str = 0, limit: int | str = 3) -> str:
+    """
+    Legge il testo completo di un articolo da un URL trovato tramite la ricerca web.
+    IMPORTANTE: Passa SOLO l'URL esatto, non testo generico.
 
-@tool
-def llm_quality_judge(text: str) -> str:
+    Args:
+        source_url (str): L'URL della pagina web da leggere (es. "https://www.ign.com/articolo").
+        offset (int): Da quale paragrafo iniziare a leggere (default: 0).
+        limit (int): Quanti paragrafi leggere alla volta (default: 3).
     """
-    Questo tool simula un LLM fine-tunato che fa da giudice di qualità.
-    Per ora restituisce casualmente 'APPROVED' o 'NEEDS REVISION'.
-    In futuro useremo un modello open-source fine-tunato su esempi di articoli gaming di alta qualità per valutare se la bozza è pronta o necessita di ulteriori revisioni.
-    """
-    if "Elden Ring" in text:
-        return "APPROVED"
-    return "NEEDS REVISION"
+    try:
+        offset = int(offset)
+        limit = int(limit)
+        docs = rag_manager.get_article_chunks(source_url, offset=offset, limit=limit)
+
+        if not docs:
+            return f"Nessun chunk trovato per {source_url} (offset={offset}). L'articolo potrebbe essere terminato."
+
+        content_parts = []
+        for doc in docs:
+            idx = doc.metadata.get('chunk_index', '?')
+            total = doc.metadata.get('total_chunks', '?')
+            content_parts.append(f"[Chunk {idx}/{total}]\n{doc.page_content}")
+
+        next_offset = offset + limit
+        content = "\n\n".join(content_parts)
+        return f"Contenuto articolo ({source_url}):\n{content}\n\n[Per leggere oltre, usa offset={next_offset}]"
+
+    except Exception as e:
+        return f"Errore lettura articolo: {e}"
+
 
 @tool
 def youtube_transcript_fetcher(video_url: str) -> str:
-    """Recupera la trascrizione completa di un video YouTube dato il suo URL e la salva nel database vettoriale locale."""
+    """Scarica la trascrizione completa di un video YouTube e la salva nel database vettoriale locale con metadata.
+
+    Args:
+        video_url (str): L'URL del video YouTube da cui estrarre la trascrizione (es. "https://www.youtube.com/watch?v=abc123").
+    """
     try:
         if "v=" in video_url:
             video_id = video_url.split("v=")[1].split("&")[0]
@@ -87,13 +161,28 @@ def youtube_transcript_fetcher(video_url: str) -> str:
         transcript_data = ytt.fetch(video_id)
         raw_text = " ".join([t.text for t in transcript_data])
 
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP
+        )
         chunks = splitter.split_text(raw_text)
 
-        rag_instance.add_texts(chunks)
+        documents = [
+            Document(
+                page_content=chunk,
+                metadata={
+                    "source_url": video_url,
+                    "source_name": f"YouTube Video ({video_id})",
+                    "source_type": "youtube",
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                }
+            )
+            for i, chunk in enumerate(chunks)
+        ]
 
+        added = rag_manager.add_documents(documents)
         word_count = len(raw_text.split())
-        return f"Trascrizione completa ({word_count} parole) scaricata e salvata con successo nel database vettoriale locale (ChromaDB). Per leggere le informazioni, utilizza IMMEDIATAMENTE il tool 'rag_retrieval_tool' facendo query specifiche su ciò che stai cercando."
+        return f"Trascrizione YouTube ({word_count} parole) salvata: {added} chunk. Usa 'rag_retrieval_tool' per leggere i dettagli."
 
     except Exception as e:
         return f"Impossibile estrarre la trascrizione: {e}"
