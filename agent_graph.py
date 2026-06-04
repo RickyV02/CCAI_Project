@@ -181,9 +181,23 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             "Questa è la PRIMA recensione per questo gioco. L'angolo DEVE essere 'Recensione Completa e Generale'. Il piano deve coprire lore/storia, gameplay, comparto tecnico e tutte le altre informazioni utili che trovi."
         )
 
+        user_prompt_content = f"Topic: '{topic}'\nReview esistenti:\n{existing_reviews}\n"
+
+        if has_existing and 'user_response' in locals():
+            user_prompt_content += f"\n💬 FEEDBACK DELL'UTENTE: '{user_response}'\n"
+            user_prompt_content += (
+                "🚨 REGOLA SULL'ANGOLO: Analizza il feedback dell'utente. "
+                "Se contiene SOLO una conferma generica (es. 'ok', 'va bene', 'procedi', 'sì'), "
+                "ignora il feedback e inventa tu un angolo inedito.\n"
+                "Se invece l'utente ha richiesto un focus specifico (es. 'parliamo della trama', 'solo i boss', 'ok, fai la grafica'), "
+                "DEVI ASSOLUTAMENTE impostare il campo 'review_angle' su quella specifica richiesta!\n"
+            )
+
+        user_prompt_content += "\nGenera un piano editoriale."
+
         plan_result = planner_llm.invoke([
             ("system", f"Sei un Editorial Director per un blog di videogiochi.\n{angle_instruction}"),
-            ("user", f"Topic: '{topic}'\nReview esistenti:\n{existing_reviews}\nGenera un piano editoriale.")
+            ("user", user_prompt_content)
         ])
 
         reasoning.append(create_react_entry("planner", f"RAGIONAMENTO DEL DIRETTORE:\n{plan_result.reasoning_process}", "llm.with_structured_output(PlannerOutput)", f"Piano generato: angolo '{plan_result.review_angle}'"))
@@ -213,6 +227,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     topic = state['user_input']
     kg_context = state.get('kg_context', '')
     feedback = state.get('human_feedback', '')
+    review_angle = state.get('planning_information', {}).get('review_angle', 'Recensione Generale')
     reasoning = []
     tool_outputs = {}
 
@@ -254,18 +269,33 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     llm_with_tools = llm.bind_tools(optional_tools)
 
     system_prompt = (
-        f"Sei un instancabile ricercatore per un blog di videogiochi.\n"
-        f"Devi approfondire '{topic}'. Contesto KG: {truncate_text(kg_context, 500)}\n"
+        f"Sei un instancabile e meticoloso ricercatore per un blog di videogiochi.\n"
+        f"Devi cercare informazioni enciclopediche e critiche su '{topic}'. Contesto dal KG: {truncate_text(kg_context, 500)}\n"
+        f"🚨 FOCUS DELLA RICERCA: L'angolo editoriale è '{review_angle}'.\n"
+        f"Se è un angolo specifico, orienta le tue query (web e RAG) su quel singolo aspetto; se è generale, copri tutti gli aspetti del gioco.\n"
         f"FEEDBACK DELL'UTENTE: '{feedback}'. Concentrati nel cercare informazioni per soddisfare questa richiesta!\n\n"
-        f"🚨 REGOLA CHIAMATA TOOL: Invoca i tool usando ESATTAMENTE e SOLO il loro nome (es. 'search_tool'). È severamente vietato concatenare o fondere gli argomenti JSON direttamente nel nome del tool.\n"
-        f"🚨 DIRETTIVA FONDAMENTALE SULLA RICERCA E I TOOL:\n"
-        f"1. Cerca info solo sul GIOCO BASE ('{topic}'). Scarta URL su DLC, Mod, Remaster o Spinoff.\n"
-        f"2. La semplice ricerca web ti dà solo dei riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Quando trovi un URL interessante, DEVI leggere l'articolo completo usando il tool `deep_read_article`. Cerca di approfondire SOLO articoli di testate giornalistiche, recensioni, wiki o guide (es. IGN, Fandom, Wikipedia, Everyeye, Multiplayer).\n"
-        f"3. Passa al tool l'URL che hai trovato. Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset.\n"
-        f"4. Se hai dubbi su personaggi, boss o meccaniche già noti nel nostro database, usa `knowledge_graph_tool` per un fact-checking.\n"
-        f"5. Se trovi un video interessante, usa `youtube_transcript_fetcher` per estrarre la trascrizione e cercare info rilevanti al suo interno.\n\n"
+
+        f"🚨 CHECKLIST E FOCUS DELLA RICERCA: Non usare l'azione 'STOP' finché non hai trovato, usando più tool, queste informazioni essenziali (salvo esaurimento iterazioni)\n"
+        f"Il tuo obiettivo principale è soddisfare questo Focus Editoriale: '{review_angle}'.\n"
+        f"- SE IL FOCUS È GENERALE (es. 'Recensione Completa e Generale'): Non usare 'STOP' finché non hai trovato: 1. Trama generale e contesto narrativo, 2. Gameplay e meccaniche principali, 3. Dati tecnici (Anno, piattaforme, sviluppatore).\n"
+        f"- SE IL FOCUS È SPECIFICO (es. 'Sistema di combattimento'): La tua priorità ASSOLUTA è trovare informazioni iper-dettagliate su '{review_angle}'. IGNORA i punti della checklist se non c'entrano nulla con il tuo focus (es., se il focus è la storia, ignora elementi come il gameplay o i combattimenti)! Trova solo i Dati Tecnici di base per inquadrare il gioco, e poi sprofonda nella ricerca del tuo argomento specifico.\n"
+        f"- DEVI aver usato 'deep_read_article' su ALMENO DUE URL DISTINTI (es. prima leggi Wikipedia, poi DEVI leggere anche una testata come IGN o Multiplayer). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
+        f"- Se hai letto con la deep read almeno due URL diversi, poi decidi tu quale approfondire aumentando gli offset per leggere il resto dell'articolo.\n"
+        f"- Se le ricerche iniziali (Tavily/RAG) non bastano, INVENTA NUOVE QUERY mirate (es. se il focus è la lore, cerca 'Silent Hill spiegazione finale' o 'Silent Hill simbolismi').\n\n"
+
+        f"🚨 DIRETTIVE TECNICHE SUI TOOL (DA RISPETTARE RIGOROSAMENTE):\n"
+        f"- GIOCO BASE: Cerca info solo su '{topic}'. Scarta DLC, Mod o Spinoff.\n"
+        f"- VALUTAZIONE FONTI: Prima di usare 'deep_read_article', leggi lo snippet del 'search_tool'. Se lo snippet contiene parole che ti fanno pensare a siti che includano informazioni INUTILI (per esempio un sito di compravendita di videogiochi) IGNORA QUEL LINK. Non sprecare iterazioni a leggerlo. Usa piuttosto il tuo ragionamento per fare una nuova query più specifica (es. 'Silent Hill recensione trama')\n"
+        f"- LETTURA PROFONDA: La semplice ricerca web dà solo riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset. Cerca di approfondire SOLO articoli di testate giornalistiche, recensioni, wiki o guide.\n"
+        f"- USO DEL RAG: Il tool 'rag_retrieval_tool' non serve solo per cercare il titolo del gioco. Puoi e DEVI usarlo passandogli DOMANDE DISCORSIVE specifiche per approfondire la tua conoscenza del gioco (es. 'Come funziona il sistema di cura?', 'Chi è il boss finale?'). Il RAG ti risponderà pescando dai chunk salvati!\n"
+        f"- VIDEO YOUTUBE: Se trovi un video interessante, usa `youtube_transcript_fetcher` per estrarre la trascrizione e cercare info rilevanti al suo interno.\n"
+        f"- CHIAMATA SINTATTICA TOOL: Invoca i tool usando ESATTAMENTE e SOLO il loro nome (es. 'search_tool'). È severamente vietato concatenare o fondere gli argomenti JSON direttamente nel nome del tool.\n"
+        f"- KNOWLEDGE GRAPH: Usa 'knowledge_graph_tool' per dubbi o fact-checking veloce sugli aspetti del topic.\n\n"
+        f"- REGOLA APPROFONDIMENTO DELLE DUE FONTI: Non usare l'azione 'STOP' se hai esplorato un solo dominio web. Anche se il primo sito (es. Wikipedia) ti ha dato tutte le informazioni, DEVI usare 'deep_read_article' su un secondo URL di una testata giornalistica per avere un parere critico prima di terminare la ricerca.\n"
+        f"- ISOLAMENTO DELLA SAGA E GIOCO ESATTO: Cerca info ESCLUSIVAMENTE sul gioco '{topic}'. SCARTA CATEGORICAMENTE link o info su prequel, sequel (es. Silent Hill 2), film omonimi o capitoli futuri (es. Silent Hill f). Nelle tue query (Web e RAG), usa parole chiave per disambiguare (es. 'Silent Hill 1999 PS1 trama').\n"
+
+        f"⏳ ATTENZIONE: Hai un limite rigido di ITERAZIONI. Cerca di essere chirurgico e completare la Checklist il più velocemente possibile prima di esaurirle.\n"
         f"PENSA AD ALTA VOCE: Prima di usare qualsiasi tool, scrivi sempre una frase spiegando quale informazione ti manca e PERCHÉ stai per usare quel tool."
-        f"Esplora finché non hai una comprensione profonda della lore e del gameplay, poi fermati e fornisci un riassunto testuale."
     )
 
     messages = [
@@ -287,7 +317,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
                 ))
                 break  # Fine ricerca, l'LLM ha deciso di fermarsi
 
-            actual_thought = response.content.strip() if response.content else f"Analizzo il contesto e decido di usare {tool_name}"
+            actual_thought = response.content.strip() if response.content else f"Analizzo il contesto e decido di usare {response.tool_calls[0]['name']}"
 
             for tc in response.tool_calls:
                 tool_name = tc["name"]
@@ -366,16 +396,18 @@ def summarizer_node(state: AgentState) -> Dict[str, Any]:
         elif results and str(results).strip():
             all_research.append(f"[{tool_name}]: {results}")
 
-    research_text = truncate_text("\n\n".join(all_research), 15000)
+    research_text = truncate_text("\n\n".join(all_research), 25000) # Limite token per l'estrazione, preferisco tagliare qui che rischiare di superare il limite durante l'estrazione e perdere tutto il contesto
 
     system_prompt = (
         f"Sei un analista di ricerca enciclopedico. Il tuo compito è leggere i dati forniti ed ESTRARRE ogni singolo dettaglio rilevante.\n"
         f"🚨 REGOLA: NON FARE RIASSUNTI BREVI. Mantieni ogni singolo dettaglio specifico sul gioco, aneddoto sulla trama e modalità di gameplay, ecc... che trovi nel testo originale.\n"
-        f"Filtra solo la spazzatura web (menu, cookie, pubblicità). Genera paragrafi ricchi di dettagli, non elenchi puntati o riassunti brevi.\n"
+        "🚨 REGOLA ZERO-ALLUCINAZIONI SULLE FONTI: Estrai ESCLUSIVAMENTE gli URL e i nomi delle fonti che sono scritti esplicitamente nel testo che ricevi. È SEVERAMENTE VIETATO inventare URL o testate giornalistiche che non ti sono state fornite basandoti sulla tua memoria interna.\n"
+        "🚨 REGOLA DEGLI SCARTI (FACT CHECKING): Se leggi testi provenienti da store, listini prezzi o fonti non pertinenti, filtrali. MA DEVI OBBLIGATORIAMENTE dichiarare che li hai scartati nel campo 'fact_check_notes' spiegando il perché (es. 'Scartata fonte X perché è un e-commerce') L'e-commerce è solo un esempio per aiutarti a comprende il task.\n"
+        f"- ATTENZIONE ALLA CONTAMINAZIONE DA FRANCHISE: Se il testo fornito contiene informazioni su sequel, prequel, remake, film o altri capitoli della saga (es. citazioni a 'Silent Hill f', 'Silent Hill 2', o mostri iconici di altri capitoli come 'Pyramid Head'), ELIMINALI COMPLETAMENTE dall'estrazione. Salva solo i dati del capitolo originale e dichiara lo scarto nelle 'fact_check_notes'.\n"
+        f"Filtra la spazzatura web (menu, cookie, pubblicità). Genera paragrafi ricchi di dettagli, non elenchi puntati o riassunti brevi.\n"
         f"Valuta la credibilità delle fonti: 'alta' (testate note, es. IGN, Everyeye, Multiplayer.it, GameSpot, GameInformer), 'media' (blog), 'bassa' (sconosciute)."
         f"Se fonti diverse dicono cose opposte, fidati di quella con credibilità più alta.\n\n"
-        f"Se ci sono informazioni inutili e/o fuorvinati e/o fuori contesto, segnalalo compilando l'apposito campo 'fact_check_notes'. Allo stesso modo, se trovi contraddizioni tra le fonti web e/o con il KG, evidenziale chiaramente sempre nella sezione 'fact_check_notes' alla fine dell'estrazione.\n\n"
-        f"Se non ci sono discrepanze, lascia il campo 'fact_check_notes' vuoto.\n\n"
+        f"Se ci sono informazioni inutili e/o fuorvinati e/o fuori contesto (ad esempio, informazioni non rilevanti perché c'è una fonte che non c'entra nulla con il gioco e/o con le recensioni e che contiene informazioni totalmente fuori contesto), segnalalo compilando l'apposito campo 'fact_check_notes' (le fonti che citi in questo campo vanno riportate con il loro URL, se lo hanno). Allo stesso modo, se trovi contraddizioni tra le fonti web e/o con il KG, evidenziale chiaramente sempre nella sezione 'fact_check_notes' alla fine dell'estrazione.\n\n"
         f"CONTESTO KNOWLEDGE GRAPH (usalo per fact-checking):\n{truncate_text(kg_context, 1000)}"
     )
 
@@ -421,16 +453,27 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
     plan = state.get('planning_information', {}).get('plan', '')
     review_angle = state.get('planning_information', {}).get('review_angle', '')
     human_feedback = state.get('human_feedback', '').strip()
-    
+
     recent_posts = kg_manager.get_recent_posts(limit=3)
 
     system_prompt = f"""Sei un blogger esperto di videogiochi.
-Devi scrivere una RECENSIONE di '{topic}'.
-Focus editoriale suggerito: {review_angle}.
+Devi scrivere un ARTICOLO su '{topic}'.
+
+🚨 ADERENZA TOTALE AL FOCUS (MASSIMA PRIORITÀ):
+Focus editoriale OBBLIGATORIO: {review_angle}.
+- Se il focus è specifico (es. 'Meccaniche di combattimento', 'Analisi della trama'), l'80% dell'intero articolo DEVE essere dedicato a scavare in profondità in quel singolo aspetto. Usa il restante 20% per dare una veloce infarinatura generale. Non fare una recensione classica!
+- Se il focus è 'Recensione Completa e Generale', allora fai un'analisi classica a 360 gradi coprendo tutti gli aspetti (una recensione tradizionale).
+
+🚨 ZERO FILLER (DIVIETO DI PARAGRAFI VUOTI):
+Se dal materiale di ricerca non emergono informazioni su un certo aspetto (es. grafica, audio, o una certa meccanica), NON scriverlo. È SEVERAMENTE VIETATO scrivere frasi come "Purtroppo non abbiamo informazioni su...". Semplicemente, lascia perdere quell'aspetto e concentrati solo su ciò che è emerso dalla ricerca!
+È SEVERAMENTE VIETATO inserire note di scuse alla fine dell'articolo (es. "Nota: le informazioni sono limitate...").
+È SEVERAMENTE VIETATO usare parole dubbiose e ipotetiche ripetitive come "Sembra che", "Potrebbe essere". Scrivi in modo assertivo basandoti SOLO su quello che sai per certo, devi essere sicuro e professionale sulla base delle informazioni che hai!
 
 REGOLA ANTI-ALLUCINAZIONE E LIMITI SUL CONTENUTO:
 - Parla ESCLUSIVAMENTE di '{topic}'.
 - Scrivi usando ESCLUSIVAMENTE le informazioni presenti nel materiale di ricerca fornito sotto. Non inventare nulla.
+- ISOLAMENTO DELLA SAGA: Se '{topic}' è il primo capitolo di una serie, è SEVERAMENTE VIETATO citare mostri, personaggi, eventi o recensioni appartenenti a sequel, film o remake futuri (es. niente Pyramid Head in Silent Hill 1). Stesso discorso vale per un gioco X, se X è il terzo capitolo, tu devi parlare e usare informazioni solo di X, non di capitoli precedenti e/o futuri.
+- ATTENZIONE ALLA CONTAMINAZIONE DA FRANCHISE: Se il testo fornito contiene informazioni su sequel, prequel, remake, film o altri capitoli della saga (es. citazioni a 'Silent Hill f', 'Silent Hill 2', o mostri iconici di altri capitoli come 'Pyramid Head'), NON USARLI perché fuori tema rispetto alla recensione del gioco!
 
 LUNGHEZZA DELL'ARTICOLO:
 L'articolo deve rispettare questa indicazione di lunghezza: {POST_LENGTH_GUIDANCE}. Per raggiungere questo obiettivo senza allungare il brodo, sviluppa i paragrafi in ESTREMA profondità, analizzando minuziosamente la lore, ogni singola meccanica e l'atmosfera.
@@ -441,8 +484,10 @@ RICCHEZZA DEI DETTAGLI (PER IL DATABASE DEL BLOG):
 - 🚨 ATTENZIONE: Inserisci questi dati SOLO se sono presenti nel 'MATERIALE DI RICERCA' o nel 'CONTESTO DEL GIOCO'. Se un dato manca, NON inventarlo per nessun motivo.
 
 CITAZIONI CROSS-POST E STILE BLOG:
+- TITOLO ACCATTIVANTE (H1): La primissima riga del testo deve essere un Titolo (H1) giornalistico, creativo e a effetto (es. "Lies of P: Il lato oscuro della fiaba di Collodi"). È SEVERAMENTE VIETATO usare titoli banali come "Benvenuti nel mondo di..." o incollare la dicitura asettica "una recensione completa e generale". Sii un vero copywriter!
 - Usa il tono tipico di un blog. Se appropriato, nell'introduzione puoi salutare i lettori e fare riferimento agli ultimi articoli pubblicati (elencati in 'ULTIMI POST SUL BLOG') dicendo ad esempio: "Dopo avervi parlato di [Gioco Precedente], oggi ci dedicheremo... (ovviamente questo è solo un esempio!, cerca di essere creativo ma preciso in ciò che dici rispetto alla verità del blog e delle fonti)".
 - Usa il 'CONTESTO DEL GIOCO' per menzionare giochi simili o vecchi capitoli dello stesso studio in modo naturale.
+- PARAGONI VIDEOLUDICI (OPZIONALE E CONDIZIONALE): Inserisci paragoni con altri videogiochi SOLO SE hanno un reale senso critico ed editoriale (es. per ovvie somiglianze di gameplay, atmosfera o genere). Puoi usare i giochi presenti nel 'CONTESTO DEL GIOCO' o nel 'MATERIALE DI RICERCA'. 🚨 REGOLA AUREA: Se i giochi a tua disposizione non c'entrano nulla con il topic (es. paragonare uno sparatutto a un survival horror in modo illogico), NON FARE NESSUN PARAGONE. La naturalezza del testo viene prima di tutto.
 
 CITAZIONE FONTI ESTERNE:
 Cita le fonti ALLA FINE dell'articolo in un'apposita sezione. Non citare nomi di siti o giornalisti nel mezzo del discorso.
@@ -473,7 +518,7 @@ PIANO EDITORIALE DA SEGUIRE:
             f"Formatta l'output in Markdown."
         )
     else:
-        user_message = f"Scrivi la recensione completa e dettagliata di '{topic}' rispettando le regole."
+        user_message = f"Scrivi l'articolo su '{topic}'. Ricorda la regola fondamentale: focalizzati pesantemente su '{review_angle}' rispettando il piano editoriale."
 
     messages.append(("user", user_message))
 
@@ -621,13 +666,29 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
     research_summary = state.get('research_summary', '')
     plan_info = state.get('planning_information', {})
 
+    similarity_catalog = kg_manager.get_catalog_for_similarity()
+
     system_prompt = (
         "Sei un analista dati senior. Il tuo compito è estrarre TUTTI i dati fattuali da una recensione e dai suoi appunti di ricerca per popolare un Knowledge Graph enciclopedico.\n"
         "🚨 REGOLA COMPLETEZZA: Usa gli appunti di ricerca per riempire tutti i buchi tecnici (Anno di uscita, Piattaforme, Studio di sviluppo, Genere, Personaggi) anche se la recensione non li cita esplicitamente.\n"
         "🚨 REGOLA ONTOLOGICA: Distingui rigorosamente i TITOLI dei giochi dai GENERI. 'Soulslike', 'Action RPG', 'Open World', 'Roguelike', 'Metroidvania', 'Survival Horror' sono GENERI e non giochi.\n"
         "🚨 REGOLA DI NORMALIZZAZIONE: Quando estrai il nome di un gioco, uno studio o un genere, scrivilo SEMPRE in Title Case (iniziali maiuscole, es. 'Survival Horror')."
+        "🚨 REGOLA FONDAMENTALE SUI GIOCHI SIMILI: Non farti ingannare dall'introduzione dell'articolo. I giochi citati nei saluti iniziali come 'post precedenti' NON E' DETTO CHE SIANO giochi simili. Estrai solo i veri paragoni videoludici."
+        "🚨 REGOLA DELL'ARRAY VUOTO: Se l'articolo NON fa paragoni videoludici reali e diretti tra le meccaniche o la lore, devi TASSATIVAMENTE lasciare l'array 'similar_games' VUOTO []. Non inserire MAI i giochi citati nell'introduzione come recensioni passate, A MENO CHE NON SIANO DAVVERO POI GIOCHI SIMILI (lo capisci dal contesto della recensione generale). Meglio un array vuoto che un dato falso."
+        "🚨 DEDUZIONE GIOCHI SIMILI:\n"
+        "1. Cerca nel testo della recensione se l'autore ha citato esplicitamente altri giochi come paragoni DI SOMIGLIANZA e aggiungili all'elenco.\n"
+        "2. IN AGGIUNTA ai giochi del testo, GUARDA TUTTO IL CATALOGO DELLE SOMIGLIANZE. Confronta i 'Generi' e le 'Meccaniche' del topic con quelli del catalogo. Se c'è una forte sovrapposizione (es. entrambi sono 'Survival Horror' o usano 'Stealth') o appartengono allo stesso ramo di genere/sviluppatore (o alla stessa serie/saga/franchise), inserisci i titoli dal catalogo nell'array 'similar_games', aggiungi anche questi titoli all'array 'similar_games'.\n"
+        "3. 🚨 REGOLA DELL'ARRAY VUOTO: Se nel catalogo non c'è NULLA di logicamente paragonabile per meccaniche o genere, devi TASSATIVAMENTE lasciare l'array 'similar_games' VUOTO []. Non inserire MAI i giochi citati nell'introduzione come saluti o recensioni passate. Meglio un array vuoto che un paragone falso."
+        "🚨 REGOLA ONTOLOGICA SUI TITOLI: Distingui rigorosamente i NOMI PROPRI dei giochi (es. 'Bloodborne', 'Persona 5') dalle CATEGORIE DESCRITTIVE o GENERI. "
+        "Termini come 'Soulslike', 'Action RPG', 'Social Link-Heavy Games', 'Open World' o 'Story-driven' sono generi o meccaniche, NON sono titoli di videogiochi! Se incontri una categoria descrittiva, ignorala o inseriscila nei 'Generi' o 'Meccaniche', MAI nei 'Giochi Simili'.\n"
     )
-    user_prompt = f"APPUNTI DI RICERCA:\n{research_summary}\n\nRECENSIONE FINALE:\n{draft}\n\nEstrai tutte le entità chiave per il database (Generi, Studi, Piattaforme, Anno, Boss, Meccaniche, Personaggi, Giochi Simili, Opinioni, Fonti)."
+
+    user_prompt = (
+        f"APPUNTI DI RICERCA:\n{research_summary}\n\n"
+        f"RECENSIONE FINALE:\n{draft}\n\n"
+        f"CATALOGO DELLE SOMIGLIANZE (Usa Generi e Meccaniche per dedurre i link):\n{truncate_text(str(similarity_catalog), 15000)}\n\n"
+        f"Estrai tutte le entità chiave per il database (Generi, Studi, Piattaforme, Anno, Boss, Meccaniche, Personaggi, Giochi Simili, Opinioni, Fonti)."
+    )
 
     entity_llm = llm.with_structured_output(PostEntities)
     try:

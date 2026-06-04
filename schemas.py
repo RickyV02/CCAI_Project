@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class PlannerIntent(BaseModel):
     """Capisce se l'utente vuole un gioco specifico o un suggerimento."""
     mode: str = Field(..., description="'specific' se l'utente ha indicato un gioco preciso, 'suggest' se vuole un suggerimento")
-    game_name: str = Field(default="", description="Nome del gioco se mode='specific', vuoto altrimenti")
+    game_name: str = Field(default="", description="Nome del gioco se mode='specific', vuoto altrimenti. Se l'utente specifica un gioco, estrai il suo nome CANONICO UFFICIALE (es. estrai 'Silent Hill' e non 'Silent hill 1 ps1'). Allo stesso modo, se l'utente non include il titolo completo del gioco (es. 'Silksong' invece di 'Hollow Knight: Silksong'), tu devi usare quello COMPLETO E UFFICIALE. Serve per la ricerca esatta nel database.")
 
 
 class PlannerOutput(BaseModel):
@@ -37,11 +37,11 @@ class PlannerOutput(BaseModel):
 
 class SourceEvaluation(BaseModel):
     """Valutazione qualità di una singola fonte."""
-    url: str = Field(default="", description="URL della fonte")
+    url: str = Field(default="", description="URL ESATTO fornito nel testo. NON INVENTARE MAI URL CHE NON VEDI ESPLICITAMENTE NEL PROMPT.")
     name: str = Field(..., description="Nome della testata o fonte (es. 'IGN Italia', 'Everyeye')")
     credibility: str = Field(..., description="'alta' = testata nota gaming, 'media' = blog specializzato, 'bassa' = fonte non riconosciuta")
     key_info: str = Field(..., description="Informazione principale estratta da questa fonte")
-    is_relevant: bool = Field(default=True, description="True se le info sono pertinenti al gioco in esame")
+    is_relevant: bool = Field(default=True, description="True se la fonte è stata utile per la recensione, False se era spazzatura (in questo caso spiegalo in fact_check_notes)")
 
 
 class GameResearchExtraction(BaseModel):
@@ -54,7 +54,7 @@ class GameResearchExtraction(BaseModel):
     release_info: str = Field(default="", description="Data uscita, piattaforme, sviluppatore (se presenti o intuibili dalle fonti utilizzate)")
     scores_ratings: list[str] = Field(default=[], description="Voti/punteggi citati (es. 'IGN 9/10'), se presenti o intuibili dalle fonti utilizzate")
     sources: list[SourceEvaluation] = Field(default=[], description="Valutazione di OGNI fonte usata")
-    fact_check_notes: str = Field(default="", description="Segnala eventuali contraddizioni trovate: sia quelle tra i testi web e il KG, SIA quelle interne tra le varie fonti web stesse (es. se una fonte dice una cosa e un'altra ne dice un'altra). Usa questo campo SOLO per segnalare contraddizioni, se tutti concordano e non ci sono contraddizioni, DEVI lasciare questo campo vuoto ('')")
+    fact_check_notes: str = Field(default="", description="OBBLIGATORIO: Annota qui le eventuali discrepanze fattuali (tra le diverse fonti web o in contrasto con il Knowledge Graph) e le motivazioni dettagliate se hai ignorato o scartato intere fonti perché ritenute spazzatura o fuori contesto. Esempi: 'Scartato il sito PriceCharting perché è un listino prezzi', 'Corretta la data di uscita rispetto al web'. Quando citi una fonte, riporta l'URL. Se tutte le fonti analizzate sono valide e non sono presenti discrepanze, lascia il campo vuoto.")
 
 
 class QualityVerdict(BaseModel):
@@ -70,7 +70,7 @@ class QualityVerdict(BaseModel):
 
 class PostEntities(BaseModel):
     """Entità estratte dalla review approvata per aggiornare il KG."""
-    main_topic: str = Field(..., description="Nome esatto del gioco principale (es. 'Elden Ring')")
+    main_topic: str = Field(..., description="Nome CANONICO UFFICIALE E COMPLETO del videogioco (es. 'Sekiro: Shadows Die Twice' e non solo 'Sekiro'). Usa sempre il titolo completo in stile Wikipedia per evitare duplicati nel database.")
     post_title: str = Field(..., description="Titolo dell'articolo")
     review_angle: str = Field(default="", description="Angolo della review (es. 'combat system', 'narrativa')")
     bosses: list[str] = Field(default=[], description="Nomi dei boss menzionati")
@@ -80,10 +80,23 @@ class PostEntities(BaseModel):
     sources: list[str] = Field(default=[], description="URL o nomi delle fonti citate")
     similar_games: list[str] = Field(
         default=[],
-        description="Lista di ALTRI VIDEOGIOCHI specifici citati come paragoni. 🚨 ATTENZIONE: Inserisci SOLO titoli esatti (es. 'Dark Souls', 'Silent Hill'). NON inserire MAI generi o categorie videoludiche (es. 'Soulslike', 'GDR', 'RPG', 'Action')."
+        description=(
+            "Lista di ALTRI VIDEOGIOCHI simili al topic principale.\n"
+            "🚨 ISTRUZIONI DI COMPILAZIONE:\n"
+            "1. TESTO: Estrai i giochi citati ESPLICITAMENTE nella recensione come reali paragoni di somiglianza.\n"
+            "2. DEDUZIONE: IN AGGIUNTA, deduci i titoli dal 'Catalogo delle Somiglianze' in base a meccaniche e generi in comune (es. unisci i Survival Horror tra loro).\n\n"
+
+            "🚨 REGOLE ONTOLOGICHE E DIVIETI:\n"
+            "- SOLO NOMI PROPRI: Inserisci esclusivamente titoli specifici e CANONICI (es. 'The Last of Us' e non 'TLOU', 'Final Fantasy VII' e non 'FF7').\n"
+            "- NIENTE CATEGORIE: È SEVERAMENTE VIETATO inserire generi, meccaniche o descrizioni (es. 'Sparatutto', 'Social link-heavy games', 'Giochi di carte'). ESEMPIO: Se il testo dice 'simile ad altri sparatutto', NON estrarre 'sparatutto' perché è un genere, non un gioco.\n"
+            "- NIENTE SALUTI: IGNORA totalmente i giochi citati nell'introduzione dell'articolo come 'post passati' o saluti.\n\n"
+
+            "🚨 FALLBACK (ARRAY VUOTO):\n"
+            "- Se non ci sono paragoni testuali e il catalogo non offre nulla di logicamente simile, DEVI lasciare l'array VUOTO []."
+        )
     )
     genres: list[str] = Field(
-        default=[], 
+        default=[],
         description="Generi videoludici a cui appartiene il gioco. ATTENZIONE: Deduci il genere dagli appunti di ricerca se non è esplicito. (es. 'Horror', 'Metroidvania', 'Action RPG')."
     )
     studios: list[str] = Field(default=[], description="Studi di sviluppo o publisher menzionati (es. 'Capcom', 'FromSoftware').")

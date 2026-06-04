@@ -139,7 +139,7 @@ class KGManager:
                collect(DISTINCT char.name) AS Personaggi
         """
         return self._run_async(self._execute_cypher_async(cypher, "read-cypher"))
-    
+
     def get_recent_posts(self, limit: int = 3) -> str:
         """Restituisce gli ultimi N articoli pubblicati sul blog."""
         cypher = f"""
@@ -148,6 +148,24 @@ class KGManager:
         RETURN b.title AS Titolo, g.name AS Gioco, b.angle AS Angolo_Trattato
         ORDER BY b.created_at DESC
         LIMIT {limit}
+        """
+        return self._run_async(self._execute_cypher_async(cypher, "read-cypher"))
+
+    def get_catalog_for_similarity(self) -> str:
+        """
+        Estrae un 'impronta digitale' di tutti i giochi nel KG (Generi, Meccaniche, Studi).
+        Serve esclusivamente all'LLM per dedurre le somiglianze tra giochi.
+        """
+        cypher = """
+        MATCH (g:Game)
+        OPTIONAL MATCH (g)-[:PART_OF_GENRE]->(genre:Genre)
+        OPTIONAL MATCH (g)-[:USES_MECHANIC]->(mech:Mechanic)
+        OPTIONAL MATCH (g)-[:DEVELOPED_BY]->(studio:Studio)
+        RETURN g.name AS Gioco,
+               collect(DISTINCT genre.name) AS Generi,
+               collect(DISTINCT mech.name) AS Meccaniche,
+               collect(DISTINCT studio.name) AS Sviluppatori
+        ORDER BY Gioco ASC
         """
         return self._run_async(self._execute_cypher_async(cypher, "read-cypher"))
 
@@ -160,12 +178,12 @@ class KGManager:
                platforms: list = None,
                release_year: int | None = None) -> bool:
         """Aggiorna il KG con le entità estratte dalla review approvata."""
-        
+
         topic = topic.title()
         similar_games = [g.title() for g in (similar_games or [])]
         genres = [g.title() for g in (genres or [])]
         studios = [s.title() for s in (studios or [])]
-        
+
         safe_topic = topic.replace("'", "\\'")
         safe_title = post_title.replace("'", "\\'")
         safe_angle = review_angle.replace("'", "\\'")
