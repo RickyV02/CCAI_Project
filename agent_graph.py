@@ -15,10 +15,10 @@ from typing import Dict, Any, Literal
 
 from state import AgentState
 from schemas import (
-    PlannerIntent, PlannerOutput, GameResearchExtraction,
+    PlannerIntent, SuggestPlannerOutput, SpecificPlannerOutput, GameResearchExtraction,
     QualityVerdict, PostEntities, FeedbackRouting, PlanApprovalRouting
 )
-from helpers import create_react_entry, format_extraction_for_writer, truncate_text
+from helpers import create_react_entry, format_extraction_for_writer, truncate_text, format_blacklist_for_llm, format_catalog_for_llm
 from tools import (
     search_tool, rag_retrieval_tool, knowledge_graph_tool,
     deep_read_article, youtube_transcript_fetcher,
@@ -37,6 +37,8 @@ MAX_RESEARCHER_ITERATIONS = int(os.getenv("MAX_RESEARCHER_ITERATIONS", "5")) # P
 # LLM principale
 llm = ChatGroq(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
 
+_INTENT_CACHE = {}
+_PLAN_CACHE = {}
 
 # ============================================================
 # NODO 1: PLANNER
@@ -55,33 +57,49 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
                    "Scegli 'specific' SOLO E UNICAMENTE se l'utente digita il nome di un videogioco specifico da recensire."),
         ("user", f"L'utente dice: '{user_in}'. Ha specificato un gioco preciso da recensire o vuole un suggerimento?")
     ]
-    intent_llm = llm.with_structured_output(PlannerIntent)
-    intent = intent_llm.invoke(intent_messages)
-
-    planner_llm = llm.with_structured_output(PlannerOutput)
+    if user_in in _INTENT_CACHE:
+        intent = _INTENT_CACHE[user_in]
+    else:
+        intent_llm = llm.with_structured_output(PlannerIntent)
+        intent = intent_llm.invoke(intent_messages)
+        _INTENT_CACHE[user_in] = intent
 
     # ==========================================
     # BINARIO A: MODALITÀ SUGGERIMENTO
     # ==========================================
     if intent.mode == "suggest":
+        planner_llm = llm.with_structured_output(SuggestPlannerOutput)
+
         all_games_kg = kg_manager.query_all_games()
+        blacklist_raw = kg_manager.get_recent_posts(limit=100)
+
         reasoning.append(create_react_entry("planner", "L'utente vuole un suggerimento, interrogo il KG per trovare i giochi meno coperti", "kg_manager.query_all_games()", truncate_text(str(all_games_kg), 300)))
 
         suggest_messages = [
             ("system", "Sei un Editorial Director per un blog di videogiochi. "
-                       "Devi generare una SEQUENZA di 3 prossime recensioni. Giustifica l'ordine logico. Infine, estrai il PRIMO gioco della sequenza per scriverlo OGGI.\n"
-                       "🚨 REGOLA SCELTA GIOCHI: Cerca giochi nel Knowledge Graph che soddisfino la richiesta. SE NON CI SONO abbastanza giochi adatti nel KG, usa la tua conoscenza generale per proporre altri titoli famosi reali. Se le informazioni del KG non sono sufficienti per soddisfare la richiesta, usa sempre la tua conoscenza generale (ad esempio, se un gioco nel KG non ha un genere associato, consiglialo SOLO SE TU NON CONOSCI ALTERNATIVE MIGLIORE E CERTE CHE RISPETTANO LA RICHIESTA).\n"
-                       "🚨 RIDONDANZA: Scegli giochi che rispettino la richiesta dell'utente, ma se un gioco è già stato recensito, evitalo per evitare la ridondanza (se non trovi giochi che rispettino la richiesta dal KG, usa sempre la tua conoscenza generale, suggerisci giochi già recensiti SOLO SE non c'è nessun'altro gioco che rispetti la richiesta).\n"
-                       "🚨 REGOLA SULL'ANGOLO: Se il gioco NON è mai stato recensito nel blog, l'angolo DEVE essere 'Recensione Completa e Generale'. Se è già stato recensito, scegli un angolo inedito.\n"
-                       "🚨 REGOLA JSON: NON usare MAI il carattere backslash (\\) per fare l'escape di apostrofi."),
-            ("user", f"L'utente ha fatto questa richiesta specifica: '{user_in}'. Tieni OBBLIGATORIAMENTE conto di questa richiesta per scegliere i giochi.\n\nEcco tutti i giochi nel Knowledge Graph e le review già scritte:\n{all_games_kg}")
+                       "Devi generare una SEQUENZA di 3 prossime recensioni. Giustifica l'ordine logico. Infine, estrai il PRIMO gioco della sequenza per scriverlo OGGI. 🚨 ATTENZIONE: LA BLACKLIST È LA LEGGE SUPREMA. Se l'utente ti chiede esplicitamente di inserire un gioco che si trova nella '⛔ BLACKLIST' o che ha '⛔ GIÀ RECENSITO' nel 'CATALOGO', DEVI IGNORARE QUELLA SPECIFICA RICHIESTA (fornirai poi nel campo apposito della risposta JSON la spiegazione) dell'utente e inserire un gioco nuovo al suo posto. Non ci sono eccezioni, neanche se l'utente insiste.\n\n"
+                       "🚨 REGOLA 1 (LA TUA PRIORITÀ ASSOLUTA - I DIVIETI): Leggi attentamente la '⛔ BLACKLIST' e il 'CATALOGO GIOCHI'. I giochi presenti nella Blacklist, o che all'interno del Catalogo hanno '⛔ GIÀ RECENSITO' sono 'BRUCIATI' e già recensiti. È SEVERAMENTE VIETATO proporli o inserirli nella sequenza. Non ci sono eccezioni.\n\n"
+                       "🚨 REGOLA 2 (LA SCELTA E I GENERI): Analizza la richiesta dell'utente. Scegli i giochi attingendo dai titoli ancora liberi nel 'CATALOGO GIOCHI', per aiutare a diversificare i contenuti del blog. Se non ci sono giochi pertinenti, ATTINGI ALLA TUA CONOSCENZA VIDEOLUDICA GENERALE. Sei PIENAMENTE AUTORIZZATO a usare la tua memoria interna, MA ATTENZIONE: devono comunque sottostare alla BLACKLIST E AL CATALOGO, CIOE NON DEVONO AVERE '⛔ GIÀ RECENSITO'. Se un gioco ti viene in mente ma è già recensito, scartalo e pensane un altro!\n"
+                       "🚨 IL CATALOGO NON È UNIVERSALE (FACT-CHECKING OBBLIGATORIO): Il database che ti forniamo è limitato e potrebbe avere lacune o errori. DEVI SEMPRE usare la tua conoscenza interna per fare fact-checking. Se un gioco nel catalogo ha un genere o un anno sbagliato, omettilo o correggilo mentalmente. Se l'utente chiede criteri specifici (es. 'horror del 2022') e nel catalogo non c'è nulla, o ci sono solo informazioni parziali, ATTINGI DIRETTAMENTE ALLA TUA MEMORIA INTERNA. Sei PIENAMENTE AUTORIZZATO a proporre giochi non presenti nel catalogo, purché non siano '⛔ GIÀ RECENSITO' o in Blacklist.\n"
+                       "Sii un purista dei generi videoludici: rispetta categoricamente le differenze tra i sottogeneri (es. non confondere JRPG giapponesi con RPG occidentali, oppure gli 'Horror' con i 'Survival Horror'). SE NON CONOSCI IL GENERE DI UN GIOCO NEL KG, USA LA TUA CONOSCENZA PERSONALE PER DETERMINARLO (se non sei sicuro, lascia perdere quel gioco come consiglio e non metterlo nel piano editoriale).\n\n"
+                       "🚨 REGOLA 3 (IL FILTRO MENTALE): Prima di confermare la sequenza, fai un check incrociato con la Fase 1. Se hai pensato a un gioco famosissimo ma è già stato recensito, SCARTALO IMMEDIATAMENTE e trovane un altro (anche meno famoso/di nicchia) per sostituirlo.\n\n"
+                       "🚨 REGOLA SULL'ANGOLO: Poiché sceglierai obbligatoriamente giochi mai trattati, l'angolo DEVE essere 'Recensione Completa e Generale'.\n\n"
+                       "🚨 REGOLA NOMI CANONICI: Quando l'utente nomina un gioco (es. FF6, Silent Hill 2 Remake), tu devi mentalmente tradurlo nel suo nome CANONICO COMPLETO UFFICIALE e confrontarlo in modo ESATTO e LETTERALE con i nomi presenti in Blacklist e Catalogo. Fai estrema attenzione ai numeri romani o arabi (es. Final Fantasy 6 NON è Final Fantasy VIII, per cui se non c'è un match esatto tra quello proposto e quello nel catalogo, il gioco proposto è '✅ LIBERO')."
+                       "🚨 REGOLA FORMATO (CRITICA): Agisci come un'API dati pura. Restituisci ESCLUSIVAMENTE l'oggetto JSON. NON incapsulare MAI la risposta in alcun tipo di tag, parentesi angolare (< >) o blocco markdown (```). Rispondi con il JSON nudo e crudo. Usa apostrofi normali, nessun backslash (\)."),
+            ("user", f"L'utente ha fatto questa richiesta specifica: '{user_in}'.\n\n"
+                     f"⛔ BLACKLIST DEI GIOCHI GIÀ RECENSITI (VIETATO USARLI):\n{format_blacklist_for_llm(blacklist_raw)}\n\n"
+                     f"🎮 CATALOGO GIOCHI (Knowledge Graph):\n{format_catalog_for_llm(all_games_kg)}")
         ]
-        plan_result = planner_llm.invoke(suggest_messages)
+        if user_in in _PLAN_CACHE:
+            plan_result = _PLAN_CACHE[user_in]
+        else:
+            plan_result = planner_llm.invoke(suggest_messages)
+            _PLAN_CACHE[user_in] = plan_result
 
         reasoning.append(create_react_entry(
             "planner",
             f"RAGIONAMENTO DEL DIRETTORE:\n{plan_result.reasoning_process}",
-            "llm.with_structured_output(PlannerOutput)",
+            "llm.with_structured_output(SuggestPlannerOutput)",
             f"Sequenza generata: {plan_result.sequence_of_posts}"
         ))
 
@@ -92,6 +110,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             "angle": plan_result.review_angle,
             "justification": plan_result.justification,
             "message": f"🗓️ CALENDARIO EDITORIALE PROPOSTO:\n"
+                       f"Analisi/Note: {plan_result.feedback_analysis}\n"
                        f"Sequenza: {', '.join(plan_result.sequence_of_posts)}\n"
                        f"Motivo: {plan_result.justification}\n\n"
                        f"💡 OGGI RECENSIREMO: '{plan_result.suggested_game}' (Focus: {plan_result.review_angle})\n\n"
@@ -107,8 +126,23 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
         if approval.decision == "modify":
             feedback_messages = [
-                ("system", "Sei un Editorial Director. Modifica il tuo piano editoriale precedente seguendo ALLA LETTERA le nuove istruzioni dell'utente. 🚨 REGOLA JSON: NON usare MAI il carattere backslash (\\) per fare l'escape di apostrofi."),
-                ("user", f"Richiesta originale: '{user_in}'\nPiano precedente:\nSequenza: {plan_result.sequence_of_posts}\nGioco di oggi: {plan_result.suggested_game}\n\nFeedback utente: '{user_response}'")
+                ("system", "Sei un Editorial Director. Modifica il tuo piano editoriale precedente seguendo ALLA LETTERA le nuove istruzioni dell'utente. 🚨 ATTENZIONE: LA BLACKLIST È LA LEGGE SUPREMA. Se l'utente ti chiede esplicitamente di inserire un gioco che si trova nella '⛔ BLACKLIST' o che ha '⛔ GIÀ RECENSITO' nel 'CATALOGO', DEVI IGNORARE QUELLA SPECIFICA RICHIESTA (fornirai poi nel campo apposito della risposta JSON la spiegazione) dell'utente e inserire un gioco nuovo al suo posto. Non ci sono eccezioni, neanche se l'utente insiste.\n\n"
+                           "🚨 GESTIONE CAMBIO TEMA (SOVRASCRITTURA): Il 'Feedback Utente' ha la PRIORITÀ ASSOLUTA sulla 'Richiesta originale'. Se l'utente nel feedback ti chiede giochi di un genere diverso (es. prima voleva Horror, ora ti chiede Hades 2 o Final Fantasy), l'utente HA CAMBIATO IDEA. DEVI ignorare e cancellare i vecchi vincoli di genere/anno e adattare il piano alle nuove richieste! Non costringere i nuovi giochi dentro i vecchi generi, devi essere FLESSIBILE e adattarti a quello che ti chiede l'utente interpretandolo correttamente.\n\n"
+                           "🚨 CONTROLLO NOMI E NUMERI (CRITICO): Prima di scartare un gioco perché credi sia nella '⛔ BLACKLIST', controlla lettera per lettera. I NUMERI SONO IMPORTANTI. 'Final Fantasy 6' (o VI) è DIVERSO da 'Final Fantasy Viii'. 'Silent Hill 2' è DIVERSO da 'Silent Hill'. Se non è un match esatto al 100%, il gioco è '✅ LIBERO' e devi usarlo!\n\n"
+                           "🚨 REGOLA 1 (LA TUA PRIORITÀ ASSOLUTA - I DIVIETI): Leggi attentamente la '⛔ BLACKLIST' e il 'CATALOGO GIOCHI'. I giochi presenti nella Blacklist, o che all'interno del Catalogo hanno '⛔ GIÀ RECENSITO' sono 'BRUCIATI' e già recensiti. È SEVERAMENTE VIETATO proporli o inserirli nella sequenza. Non ci sono eccezioni.\n\n"
+                           "Se l'utente ti chiede esplicitamente di inserire un gioco già recensito o presente nella '⛔ BLACKLIST', DEVI SCARTARE SOLO QUEL NOME e avvisare l'utente. NON CERCARE RIMPIAZZI o sostituti per il gioco vietato! Se il piano precedente andava bene per il resto dei criteri, confermalo inalterato. INVECE, se l'utente oltre a un gioco vietato ha chiesto di CAMBIARE COMPLETAMENTE i criteri (es. 'basta horror, facciamo sparatutto'), allora obbedisci alla nuova direttiva ignorando il gioco vietato.\n\n"
+                           "🚨 REGOLA 2 (LA SCELTA E I GENERI): Analizza la richiesta dell'utente. Scegli i giochi attingendo dai titoli ancora liberi nel 'CATALOGO GIOCHI', per aiutare a diversificare i contenuti del blog. Se non ci sono giochi pertinenti, ATTINGI ALLA TUA CONOSCENZA VIDEOLUDICA GENERALE. Sei PIENAMENTE AUTORIZZATO a usare la tua memoria interna, MA ATTENZIONE: devono comunque sottostare alla BLACKLIST E AL CATALOGO, CIOE NON DEVONO AVERE '⛔ GIÀ RECENSITO'. Se un gioco ti viene in mente ma è già recensito, scartalo e pensane un altro!\n"
+                           "🚨 IL CATALOGO NON È UNIVERSALE (FACT-CHECKING OBBLIGATORIO): Il database che ti forniamo è limitato e potrebbe avere lacune o errori. DEVI SEMPRE usare la tua conoscenza interna per fare fact-checking. Se un gioco nel catalogo ha un genere o un anno sbagliato, omettilo o correggilo mentalmente. Se l'utente chiede criteri specifici (es. 'horror del 2022') e nel catalogo non c'è nulla, o ci sono solo informazioni parziali, ATTINGI DIRETTAMENTE ALLA TUA MEMORIA INTERNA. Sei PIENAMENTE AUTORIZZATO a proporre giochi non presenti nel catalogo, purché non siano '⛔ GIÀ RECENSITO' o in Blacklist.\n"
+                           "Sii un purista dei generi videoludici: rispetta categoricamente le differenze tra i sottogeneri (es. non confondere JRPG giapponesi con RPG occidentali, oppure gli 'Horror' con i 'Survival Horror'). SE NON CONOSCI IL GENERE DI UN GIOCO NEL KG, USA LA TUA CONOSCENZA PERSONALE PER DETERMINARLO (se non sei sicuro, lascia perdere quel gioco come consiglio e non metterlo nel piano editoriale).\n\n"
+                           "🚨 REGOLA 3 (IL FILTRO MENTALE): Prima di confermare la sequenza, fai un check incrociato con la Fase 1. Se hai pensato a un gioco famosissimo ma è già stato recensito, SCARTALO IMMEDIATAMENTE e trovane un altro (anche meno famoso/di nicchia) per sostituirlo.\n\n"
+                           "🚨 REGOLA SULL'ANGOLO: Poiché sceglierai obbligatoriamente giochi mai trattati, l'angolo DEVE essere 'Recensione Completa e Generale'.\n\n"
+                           "🚨 REGOLA ANTI-RIPETIZIONE (CRITICA): Guarda i giochi elencati nel 'Piano precedente'. Se il feedback dell'utente ti chiede di CAMBIARE DEI GIOCHI o ne vuole ALTRI, quei titoli sono temporaneamente banditi. È SEVERAMENTE VIETATO riproporre gli stessi giochi che hai appena suggerito (a meno che l'utente non ti dica qualcosa del tipo 'il primo gioco lascialo però gli altri due cambiali', in quel caso solo gli ultimi 2 sono da modificare necessariamente rispetto a prima)!\n\n"
+                           "🚨 REGOLA NOMI CANONICI: Quando l'utente nomina un gioco (es. FF6, Silent Hill 2 Remake), tu devi mentalmente tradurlo nel suo nome CANONICO COMPLETO UFFICIALE e confrontarlo in modo ESATTO e LETTERALE con i nomi presenti in Blacklist e Catalogo. Fai estrema attenzione ai numeri romani o arabi (es. Final Fantasy 6 NON è Final Fantasy VIII, per cui se non c'è un match esatto tra quello proposto e quello nel catalogo, il gioco proposto è '✅ LIBERO')."
+                           "🚨 REGOLA FORMATO (CRITICA): Agisci come un'API dati pura. Restituisci ESCLUSIVAMENTE l'oggetto JSON. NON incapsulare MAI la risposta in alcun tipo di tag, parentesi angolare (< >) o blocco markdown (```). Rispondi con il JSON nudo e crudo. Usa apostrofi normali, nessun backslash (\)."),
+                ("user", f"Richiesta originale: '{user_in}'\nPiano precedente:\nSequenza: {plan_result.sequence_of_posts}\nGioco di oggi: {plan_result.suggested_game}\n\n"
+                         f"💬 FEEDBACK UTENTE (PRIORITARIO RISPETTO ALLA RICHIESTA ORIGINALE): '{user_response}'\n\n"
+                         f"⛔ BLACKLIST DEI GIOCHI GIÀ RECENSITI (VIETATO USARLI):\n{format_blacklist_for_llm(blacklist_raw)}\n\n"
+                         f"🎮 CATALOGO GIOCHI (Knowledge Graph):\n{format_catalog_for_llm(all_games_kg)}")
             ]
             plan_result = planner_llm.invoke(feedback_messages)
             reasoning.append(create_react_entry("planner", f"RAGIONAMENTO POST-FEEDBACK:\n{plan_result.reasoning_process}", "Modifica Inline", f"Nuovo topic: {plan_result.suggested_game}"))
@@ -116,6 +150,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             print("\n" + "=" * 50)
             print(" 🗓️ NUOVO PIANO EDITORIALE (Modificato)")
             print("=" * 50)
+            print(f"Analisi/Note: {plan_result.feedback_analysis}")
             print(f"Sequenza: {', '.join(plan_result.sequence_of_posts)}")
             print(f"💡 OGGI RECENSIREMO: '{plan_result.suggested_game}' (Focus: {plan_result.review_angle})\n")
         else:
@@ -176,7 +211,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
                 print(f"\n💡 CAMBIO GIOCO ACCETTATO. Oggi recensiremo: '{topic}'\n")
 
         angle_instruction = (
-            "Il gioco ha GIÀ delle recensioni passate nel nostro database. Scegli un ANGOLO INEDITO (es. focus su una meccanica, una boss fight)."
+            "Il gioco ha GIÀ delle recensioni passate nel nostro database. Scegli un ANGOLO INEDITO CHE NON SIA STATO TRATTATO FINORA (es. focus su una meccanica, una boss fight)."
             if has_existing else
             "Questa è la PRIMA recensione per questo gioco. L'angolo DEVE essere 'Recensione Completa e Generale'. Il piano deve coprire lore/storia, gameplay, comparto tecnico e tutte le altre informazioni utili che trovi."
         )
@@ -188,19 +223,21 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             user_prompt_content += (
                 "🚨 REGOLA SULL'ANGOLO: Analizza il feedback dell'utente. "
                 "Se contiene SOLO una conferma generica (es. 'ok', 'va bene', 'procedi', 'sì'), "
-                "ignora il feedback e inventa tu un angolo inedito.\n"
+                "ignora il feedback e inventa tu un angolo INEDITO, CONTROLLANDO che non sia già stato trattato.\n"
                 "Se invece l'utente ha richiesto un focus specifico (es. 'parliamo della trama', 'solo i boss', 'ok, fai la grafica'), "
                 "DEVI ASSOLUTAMENTE impostare il campo 'review_angle' su quella specifica richiesta!\n"
             )
 
         user_prompt_content += "\nGenera un piano editoriale."
 
+        planner_llm = llm.with_structured_output(SpecificPlannerOutput)
+
         plan_result = planner_llm.invoke([
-            ("system", f"Sei un Editorial Director per un blog di videogiochi.\n{angle_instruction}"),
+            ("system", f"Sei un Editorial Director per un blog di videogiochi.\n{angle_instruction}\n🚨 REGOLA FORMATO (CRITICA): Agisci come un'API dati pura. Restituisci ESCLUSIVAMENTE l'oggetto JSON. NON incapsulare MAI la risposta in alcun tipo di tag, parentesi angolare (< >) o blocco markdown (```). Rispondi con il JSON nudo e crudo. Usa apostrofi normali, nessun backslash (\)."),
             ("user", user_prompt_content)
         ])
 
-        reasoning.append(create_react_entry("planner", f"RAGIONAMENTO DEL DIRETTORE:\n{plan_result.reasoning_process}", "llm.with_structured_output(PlannerOutput)", f"Piano generato: angolo '{plan_result.review_angle}'"))
+        reasoning.append(create_react_entry("planner", f"RAGIONAMENTO DEL DIRETTORE:\n{plan_result.reasoning_process}", "llm.with_structured_output(SpecificPlannerOutput)", f"Piano generato: angolo '{plan_result.review_angle}'"))
 
     kg_context = kg_manager.query(topic)
 
@@ -229,37 +266,40 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     feedback = state.get('human_feedback', '')
     review_angle = state.get('planning_information', {}).get('review_angle', 'Recensione Generale')
     reasoning = []
-    tool_outputs = {}
+    tool_outputs = state.get('tool_outputs', {})
 
     # ═══════════════════════════════════════════
     # FASE 1: DETERMINISTICA (sempre eseguita)
     # ═══════════════════════════════════════════
 
-    # 1A: Web search OBBLIGATORIA
-    search_query = f"{topic} recensione"
-    print(f"    [Fase 1] Ricerca web: '{search_query}'")
-    web_result = search_tool.invoke({"query": search_query})
-    tool_outputs["search_tool"] = [str(web_result)]
+    if not feedback:
+        # 1A: Web search OBBLIGATORIA
+        search_query = f"{topic} recensione"
+        print(f"    [Fase 1] Ricerca web: '{search_query}'")
+        web_result = search_tool.invoke({"query": search_query})
+        tool_outputs["search_tool"] = [str(web_result)]
 
-    # 1B: KG query per K-RAG
-    print(f"    [Fase 1] Query KG per entità K-RAG: '{topic}'")
-    kg_entities = kg_manager.get_entities_for_krag(topic)
-    tool_outputs["knowledge_graph_tool"] = [str(kg_entities)]
-    reasoning.append(create_react_entry(
-        "researcher", "Interrogo il KG per entità da usare come query RAG espanse (K-RAG)",
-        f"kg_manager.get_entities_for_krag('{topic}')", truncate_text(str(kg_entities), 300)
-    ))
-
-    # 1C: RAG retrieval con query espanse dal KG (K-RAG)
-    krag_queries = _build_krag_queries(topic, str(kg_entities))
-    for q in krag_queries:
-        print(f"    [Fase 1] K-RAG query: '{q}'")
-        rag_result = rag_retrieval_tool.invoke({"query": q})
-        tool_outputs.setdefault("rag_retrieval_tool", []).append(str(rag_result))
+        # 1B: KG query per K-RAG
+        print(f"    [Fase 1] Query KG per entità K-RAG: '{topic}'")
+        kg_entities = kg_manager.get_entities_for_krag(topic)
+        tool_outputs["knowledge_graph_tool"] = [str(kg_entities)]
         reasoning.append(create_react_entry(
-            "researcher", f"Query RAG espansa dal KG (K-RAG): '{q}'",
-            f"rag_retrieval_tool('{q}')", truncate_text(str(rag_result), 200)
+            "researcher", "Interrogo il KG per entità da usare come query RAG espanse (K-RAG)",
+            f"kg_manager.get_entities_for_krag('{topic}')", truncate_text(str(kg_entities), 300)
         ))
+
+        # 1C: RAG retrieval con query espanse dal KG (K-RAG)
+        krag_queries = _build_krag_queries(topic, str(kg_entities))
+        for q in krag_queries:
+            print(f"    [Fase 1] K-RAG query: '{q}'")
+            rag_result = rag_retrieval_tool.invoke({"query": q})
+            tool_outputs.setdefault("rag_retrieval_tool", []).append(str(rag_result))
+            reasoning.append(create_react_entry(
+                "researcher", f"Query RAG espansa dal KG (K-RAG): '{q}'",
+                f"rag_retrieval_tool('{q}')", truncate_text(str(rag_result), 200)
+            ))
+    else:
+        print("Feedback umano presente, salto la fase deterministica e passo direttamente alla fase agentica per approfondire in modo mirato secondo il feedback.")
 
     # ═══════════════════════════════════════════
     # FASE 2: AGENTICA (Custom ReAct Loop)
@@ -268,9 +308,20 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     optional_tools = [search_tool, rag_retrieval_tool, deep_read_article, youtube_transcript_fetcher, knowledge_graph_tool]
     llm_with_tools = llm.bind_tools(optional_tools)
 
+    already_known = ""
+    previous_summary = state.get('research_summary', '').strip()
+    if previous_summary:
+        already_known = (
+            f"🚨 SINTESI DELLE INFORMAZIONI GIÀ RACCOLTE FINORA:\n"
+            f"{previous_summary}\n\n"
+            f"NON usare i tool per cercare di nuovo le informazioni scritte qui sopra! "
+            f"Concentrati ESCLUSIVAMENTE sulle mancanze o sul nuovo FEEDBACK DELL'UTENTE."
+        )
+
     system_prompt = (
         f"Sei un instancabile e meticoloso ricercatore per un blog di videogiochi.\n"
         f"Devi cercare informazioni enciclopediche e critiche su '{topic}'. Contesto dal KG: {truncate_text(kg_context, 500)}\n"
+        f"{already_known}\n"
         f"🚨 FOCUS DELLA RICERCA: L'angolo editoriale è '{review_angle}'.\n"
         f"Se è un angolo specifico, orienta le tue query (web e RAG) su quel singolo aspetto; se è generale, copri tutti gli aspetti del gioco.\n"
         f"FEEDBACK DELL'UTENTE: '{feedback}'. Concentrati nel cercare informazioni per soddisfare questa richiesta!\n\n"
@@ -289,7 +340,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         f"- LETTURA PROFONDA: La semplice ricerca web dà solo riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset. Cerca di approfondire SOLO articoli di testate giornalistiche, recensioni, wiki o guide.\n"
         f"- USO DEL RAG: Il tool 'rag_retrieval_tool' non serve solo per cercare il titolo del gioco. Puoi e DEVI usarlo passandogli DOMANDE DISCORSIVE specifiche per approfondire la tua conoscenza del gioco (es. 'Come funziona il sistema di cura?', 'Chi è il boss finale?'). Il RAG ti risponderà pescando dai chunk salvati!\n"
         f"- VIDEO YOUTUBE: Se trovi un video interessante, usa `youtube_transcript_fetcher` per estrarre la trascrizione e cercare info rilevanti al suo interno.\n"
-        f"- CHIAMATA SINTATTICA TOOL: Invoca i tool usando ESATTAMENTE e SOLO il loro nome (es. 'search_tool'). È severamente vietato concatenare o fondere gli argomenti JSON direttamente nel nome del tool.\n"
+        f"- CHIAMATA SINTATTICA TOOL: Usa esclusivamente l'interfaccia nativa invisibile per chiamare i tool. Il tuo output testuale deve contenere SOLO il tuo ragionamento in linguaggio naturale e poi invoca i tool usando ESATTAMENTE e SOLO il loro nome (es. 'search_tool'). È severamente vietato concatenare o fondere gli argomenti JSON direttamente nel nome del tool e/o scrivere tag XML.\n"
         f"- KNOWLEDGE GRAPH: Usa 'knowledge_graph_tool' per dubbi o fact-checking veloce sugli aspetti del topic.\n\n"
         f"- REGOLA APPROFONDIMENTO DELLE DUE FONTI: Non usare l'azione 'STOP' se hai esplorato un solo dominio web. Anche se il primo sito (es. Wikipedia) ti ha dato tutte le informazioni, DEVI usare 'deep_read_article' su un secondo URL di una testata giornalistica per avere un parere critico prima di terminare la ricerca.\n"
         f"- ISOLAMENTO DELLA SAGA E GIOCO ESATTO: Cerca info ESCLUSIVAMENTE sul gioco '{topic}'. SCARTA CATEGORICAMENTE link o info su prequel, sequel (es. Silent Hill 2), film omonimi o capitoli futuri (es. Silent Hill f). Nelle tue query (Web e RAG), usa parole chiave per disambiguare (es. 'Silent Hill 1999 PS1 trama').\n"
@@ -472,6 +523,7 @@ Se dal materiale di ricerca non emergono informazioni su un certo aspetto (es. g
 REGOLA ANTI-ALLUCINAZIONE E LIMITI SUL CONTENUTO:
 - Parla ESCLUSIVAMENTE di '{topic}'.
 - Scrivi usando ESCLUSIVAMENTE le informazioni presenti nel materiale di ricerca fornito sotto. Non inventare nulla.
+- ATTENZIONE AI GENERI VIDEOLUDICI: Sii un purista dei generi videoludici: rispetta categoricamente le differenze tra i sottogeneri e attieniti a quelli eventualmente presenti nelle fonti, o se deducibili da essi (es. non confondere JRPG giapponesi con RPG occidentali, oppure gli 'Horror' con i 'Survival Horror').
 - ISOLAMENTO DELLA SAGA: Se '{topic}' è il primo capitolo di una serie, è SEVERAMENTE VIETATO citare mostri, personaggi, eventi o recensioni appartenenti a sequel, film o remake futuri (es. niente Pyramid Head in Silent Hill 1). Stesso discorso vale per un gioco X, se X è il terzo capitolo, tu devi parlare e usare informazioni solo di X, non di capitoli precedenti e/o futuri.
 - ATTENZIONE ALLA CONTAMINAZIONE DA FRANCHISE: Se il testo fornito contiene informazioni su sequel, prequel, remake, film o altri capitoli della saga (es. citazioni a 'Silent Hill f', 'Silent Hill 2', o mostri iconici di altri capitoli come 'Pyramid Head'), NON USARLI perché fuori tema rispetto alla recensione del gioco!
 
@@ -490,7 +542,7 @@ CITAZIONI CROSS-POST E STILE BLOG:
 - PARAGONI VIDEOLUDICI (OPZIONALE E CONDIZIONALE): Inserisci paragoni con altri videogiochi SOLO SE hanno un reale senso critico ed editoriale (es. per ovvie somiglianze di gameplay, atmosfera o genere). Puoi usare i giochi presenti nel 'CONTESTO DEL GIOCO' o nel 'MATERIALE DI RICERCA'. 🚨 REGOLA AUREA: Se i giochi a tua disposizione non c'entrano nulla con il topic (es. paragonare uno sparatutto a un survival horror in modo illogico), NON FARE NESSUN PARAGONE. La naturalezza del testo viene prima di tutto.
 
 CITAZIONE FONTI ESTERNE:
-Cita le fonti ALLA FINE dell'articolo in un'apposita sezione. Non citare nomi di siti o giornalisti nel mezzo del discorso.
+Cita le fonti ALLA FINE dell'articolo in un'apposita sezione. Non citare nomi di siti o giornalisti nel mezzo del discorso. NON INSERIRE LA CREDIBILITA' DELLA FONTE QUANDO LE RIPORTI.
 
 MATERIALE DI RICERCA (Ricco di dettagli e lore):
 {research_summary}
@@ -501,8 +553,11 @@ CONTESTO DEL GIOCO E GIOCHI SIMILI (Dal Knowledge Graph):
 ULTIMI POST SUL BLOG (Per introduzione e continuity):
 {recent_posts}
 
-PIANO EDITORIALE DA SEGUIRE:
+PIANO EDITORIALE DA SEGUIRE (come riferimento):
 {plan}
+
+🚨 ZERO SPOILER SUL PIANO EDITORIALE:
+È SEVERAMENTE VIETATO menzionare, riassumere o incollare il "PIANO EDITORIALE" o annunciare i "prossimi articoli" all'interno del testo. Il piano ti è fornito solo come briefing interno per strutturare l'articolo, QUINDI DEVI USARLO ASSOLUTAMENTE COME TRACCIA O RIFERIMENTO PER LA RECENSIONE, MA NON CITARLO ALLA FINE O RIPORTARLO. Chiudi sempre la recensione in modo naturale o con le fonti, senza mai fare spoiler sui giochi futuri del blog.
 """
 
     messages = [("system", system_prompt)]
@@ -513,6 +568,7 @@ PIANO EDITORIALE DA SEGUIRE:
             f"Il Direttore Responsabile ha rifiutato la bozza precedente e ti ha dato questo ordine diretto:\n"
             f"\"{human_feedback}\"\n\n"
             f"Riscrivi l'INTERA recensione obbedendo ciecamente a questo feedback. "
+            f"Se ti ha chiesto un angolo diverso/un focus specifico, DEVI OBBLIGATORIAMENTE rispettare quella richiesta e focalizzarti pesantemente su quell'aspetto, anche se va contro il focus editoriale originale. Viceversa, se non è stato detto nulla in merito a focus editoriali/angoli dell'articolo, attieniti al piano editoriale/focus che hai/sai già. "
             f"Se ti ha chiesto una LINGUA DIVERSA (es. Inglese), l'intero testo generato DEVE essere in quella lingua. "
             f"Se ti ha chiesto di approfondire degli argomenti, fallo usando i dati di ricerca. "
             f"Formatta l'output in Markdown."
@@ -554,7 +610,8 @@ def quality_check_node(state: AgentState) -> Command[Literal["human_review", "wr
         "6. Lunghezza adeguata (almeno 500 parole)?\n"
         "Se manca anche un solo elemento, bocciala (passed=False).\n"
         "🚨 REGOLA JSON STRICТ: Il campo 'missing_elements' DEVE SEMPRE ESSERE UN ARRAY (lista), anche se manca un solo elemento (es. [\"Lunghezza\"]). Non usare mai una stringa semplice."
-        "🚨 REGOLA FORMATO OUTPUT: Non 'incartare' la risposta. È SEVERAMENTE VIETATO usare tag XML (es. <function=QualityVerdict>) o blocchi markdown. Fornisci ESCLUSIVAMENTE gli argomenti grezzi."
+        "🚨 REGOLA FORMATO OUTPUT: Non 'incartare' la risposta. È SEVERAMENTE VIETATO usare tag XML o blocchi markdown. Fornisci ESCLUSIVAMENTE gli argomenti grezzi."
+        "🚨 REGOLA APOSTROFI: NON usare MAI il backslash (\\) per fare l'escape degli apostrofi nei testi. Scrivi in modo normale (es. un'opinione) altrimenti il parser esplode."
     )
     user_prompt = f"Questa bozza è lunga ESATTAMENTE {word_count} parole.\nValuta attentamente questa bozza di recensione:\n\n{draft}"
 
@@ -585,12 +642,16 @@ def quality_check_node(state: AgentState) -> Command[Literal["human_review", "wr
             goto="human_review"
         )
     else:
+        old_feedback = state.get('human_feedback', '').strip()
+        auto_revision_msg = f"REVISIONE AUTOMATICA: {verdict.reason}. Elementi mancanti: {', '.join(verdict.missing_elements)}"
+        combined_feedback = f"{old_feedback}\n\n🚨 {auto_revision_msg}" if old_feedback else auto_revision_msg
+
         return Command(
             update={
                 "quality_passed": False,
                 "revision_count": revision_count + 1,
                 "reasoning_trace": reasoning,
-                "human_feedback": f"REVISIONE AUTOMATICA: {verdict.reason}. Elementi mancanti: {', '.join(verdict.missing_elements)}"
+                "human_feedback": combined_feedback
             },
             goto="writer"
         )
@@ -605,15 +666,62 @@ def human_review_node(state: AgentState) -> Command[Literal["memory_updater", "w
 
     feedback_payload = interrupt("In attesa di feedback...")
     feedback = str(feedback_payload).strip()
+    topic = state['user_input']
 
     # Routing via LLM
     system_prompt = (
         "Sei un sistema di routing che classifica il feedback di un utente sulla recensione di un videogioco.\n"
+        f"Il topic dell'articolo prodotto è '{topic}'.\n"
         "Scegli UNA tra queste decisioni:\n"
-        "- 'need_research': L'utente vuole più dettagli (es. 'parlami più dei boss', 'manca la lore').\n"
-        "- 'change_topic': L'utente vuole scartare il gioco e recensirne un altro (es. 'cambia gioco', 'facciamo Zelda').\n"
-        "- 'rewrite': L'utente vuole solo correzioni di stile o lunghezza (es. 'falla più corta', 'usa un tono più epico').\n"
-        "- 'approve': L'utente fa complimenti senza chiedere modifiche (es. 'ottimo lavoro')."
+        "- 'need_research': L'utente vuole più dettagli, ma sullo stesso topic dell'articolo (es. 'parlami più dei boss', 'manca la lore', 'approfondiamo questa parte', 'focus sul gameplay'; senza specificare un nuovo topic/gioco).\n"
+        "- 'change_topic': L'utente vuole scartare il gioco e recensirne un altro rispetto a quello che era il topic dell'articolo (es. 'cambia gioco', 'facciamo Zelda', 'recensiamo Elden Ring con focus sul gameplay'; quindi sta cambiando topic).\n"
+        "- 'rewrite': L'utente vuole solo correzioni di stile o lunghezza (es. 'falla più corta', 'usa un tono più epico') sullo stesso topic dell'articolo.\n"
+        "- 'approve': L'utente fa complimenti senza chiedere modifiche e/o fornire indicazioni specifiche (es. 'ottimo lavoro')."
+
+        "\nREGOLE DI PRIORITÀ:\n"
+        "1. Se il feedback menziona un videogioco diverso dal topic corrente, scegli SEMPRE 'change_topic'.\n"
+        "2. Anche se l'utente specifica focus, approfondimenti o aspetti da trattare del nuovo gioco, SE il topic è diverso allora la decisione resta 'change_topic'.\n"
+        "3. 'need_research' può essere scelto SOLO se il feedback riguarda il topic corrente (oppure viene chiesto un approfondimento senza nominare un nuovo topic).\n"
+        "4. 'rewrite' può essere scelto SOLO se il feedback riguarda il testo già scritto sul topic corrente e non viene nominato un nuovo topic (vedi esempi sotto).\n"
+        "5. 'approve' può essere scelto SOLO se non sono presenti richieste o istruzioni.\n"
+
+        "ESEMPI:\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: recensiamo Silent Hill F\n"
+        "Decisione: change_topic\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: recensiamo Silent Hill F con focus sulla storia e lore\n"
+        "Decisione: change_topic\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: passiamo a Elden Ring\n"
+        "Decisione: change_topic\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: approfondisci la lore\n"
+        "Decisione: need_research\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: parlami di più dei boss\n"
+        "Decisione: need_research\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: rendila più corta\n"
+        "Decisione: rewrite\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: usa un tono più professionale\n"
+        "Decisione: rewrite\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: ottimo lavoro\n"
+        "Decisione: approve\n\n"
+
+        "Topic corrente: Dark Souls\n"
+        "Feedback: perfetto così\n"
+        "Decisione: approve"
     )
 
     user_prompt = f"FEEDBACK UTENTE: {feedback}"
@@ -648,9 +756,17 @@ def human_review_node(state: AgentState) -> Command[Literal["memory_updater", "w
         "reasoning_trace": reasoning
     }
 
-    # Se l'utente vuole cambiare gioco, resettiamo l'input per il planner
+    # Se l'utente vuole cambiare gioco, dobbiamo fare un HARD RESET della memoria globale!
     if goto_node == "planner":
         update_data["user_input"] = feedback
+        update_data["human_feedback"] = ""         # Svuotiamo il feedback così il Ricercatore farà la Fase 1!
+        update_data["tool_outputs"] = {}           # Svuotiamo la memoria di ricerca del gioco precedente
+        update_data["research_summary"] = ""       # Svuotiamo i riassunti vecchi
+        update_data["draft_post"] = ""             # Cancelliamo la bozza vecchia
+        update_data["planning_information"] = {}   # Resettiamo il piano
+
+        _INTENT_CACHE.clear()
+        _PLAN_CACHE.clear()
 
     return Command(update=update_data, goto=goto_node)
 
@@ -674,6 +790,10 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
         "🚨 REGOLA ONTOLOGICA: Distingui rigorosamente i TITOLI dei giochi dai GENERI. 'Soulslike', 'Action RPG', 'Open World', 'Roguelike', 'Metroidvania', 'Survival Horror' sono GENERI e non giochi.\n"
         "🚨 REGOLA DI NORMALIZZAZIONE: Quando estrai il nome di un gioco, uno studio o un genere, scrivilo SEMPRE in Title Case (iniziali maiuscole, es. 'Survival Horror')."
         "🚨 REGOLA FONDAMENTALE SUI GIOCHI SIMILI: Non farti ingannare dall'introduzione dell'articolo. I giochi citati nei saluti iniziali come 'post precedenti' NON E' DETTO CHE SIANO giochi simili. Estrai solo i veri paragoni videoludici."
+        "🚨 REGOLA PER L'ANGOLO: Analizza il TITOLO e il testo della 'RECENSIONE FINALE'.\n"
+            "- Se l'articolo si concentra CHIARAMENTE su un aspetto specifico (lo capisci dal titolo, es. 'La Storia di...', 'Meccaniche di...'), scrivi il focus tematico nuovo (es. 'Analisi della Storia').\n"
+            "- Se invece l'articolo è generale e tocca tutto, ricopia ESATTAMENTE il valore di 'ANGOLO ORIGINALE'.\n"
+            "- NON inserire MAI generi del gioco (es. 'Survival Horror') in questo campo.\n"
         "🚨 REGOLA DELL'ARRAY VUOTO: Se l'articolo NON fa paragoni videoludici reali e diretti tra le meccaniche o la lore, devi TASSATIVAMENTE lasciare l'array 'similar_games' VUOTO []. Non inserire MAI i giochi citati nell'introduzione come recensioni passate, A MENO CHE NON SIANO DAVVERO POI GIOCHI SIMILI (lo capisci dal contesto della recensione generale). Meglio un array vuoto che un dato falso."
         "🚨 DEDUZIONE GIOCHI SIMILI:\n"
         "1. Cerca nel testo della recensione se l'autore ha citato esplicitamente altri giochi come paragoni DI SOMIGLIANZA e aggiungili all'elenco.\n"
@@ -684,6 +804,7 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
     )
 
     user_prompt = (
+        f"ANGOLO ORIGINALE: '{plan_info.get('review_angle', 'Generico')}'\n"
         f"APPUNTI DI RICERCA:\n{research_summary}\n\n"
         f"RECENSIONE FINALE:\n{draft}\n\n"
         f"CATALOGO DELLE SOMIGLIANZE (Usa Generi e Meccaniche per dedurre i link):\n{truncate_text(str(similarity_catalog), 15000)}\n\n"
@@ -712,7 +833,7 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
     update_success = kg_manager.update(
         post_title=unique_title,
         topic=entities.main_topic,
-        review_angle=entities.review_angle or plan_info.get('review_angle', ''),
+        review_angle=entities.review_angle,
         bosses=entities.bosses,
         mechanics=entities.mechanics,
         claims=entities.claims,

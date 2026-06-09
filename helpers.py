@@ -1,6 +1,6 @@
 import json
 import re
-
+import ast
 
 def create_react_entry(node: str, thought: str, action: str, observation: str) -> dict:
     """Crea un entry strutturata per la reasoning trace ReAct."""
@@ -72,3 +72,21 @@ def truncate_text(text: str, max_chars: int = 500) -> str:
         return text
     truncated = text[:max_chars].rsplit(' ', 1)[0]
     return truncated + "..."
+
+def format_blacklist_for_llm(raw) -> str:
+    data = json.loads(ast.literal_eval(str(raw))[0]['text'])
+    games = {entry.get('Gioco', '').strip() for entry in data if entry.get('Gioco')}
+    return "\n".join(f"- {game}" for game in sorted(games))
+
+def format_catalog_for_llm(raw) -> str:
+    data = json.loads(ast.literal_eval(str(raw))[0]['text'])
+    return "\n".join(
+        f"- {e.get('Gioco', '?')} | Anno: {e.get('Anno') or 'N/D'} | "
+        f"Generi: {', '.join(e.get('Generi', [])) or 'N/D'} | "
+        f"Meccaniche: {', '.join(e.get('Meccaniche', [])) or 'N/D'} | "
+        f"Piattaforme: {', '.join(e.get('Piattaforme', [])) or 'N/D'} | "
+        f"Simili: {', '.join(e.get('Giochi_Simili', [])) or 'N/D'} | "
+        f"Sviluppatore: {', '.join(e.get('Sviluppatore', [])) or 'N/D'} | "
+        f"{'✅ LIBERO' if e.get('Numero_Review', 0) == 0 else '⛔ GIÀ RECENSITO'}"
+        for e in data
+    )

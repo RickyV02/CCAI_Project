@@ -110,9 +110,15 @@ class KGManager:
         OPTIONAL MATCH (g)-[:COVERED_IN]->(b:BlogPost)
         OPTIONAL MATCH (g)-[:PART_OF_GENRE]->(genre:Genre)
         OPTIONAL MATCH (g)-[:DEVELOPED_BY]->(studio:Studio)
+        OPTIONAL MATCH (g)-[:USES_MECHANIC]->(mech:Mechanic)
+        OPTIONAL MATCH (g)-[:AVAILABLE_ON]->(plat:Platform)
+        OPTIONAL MATCH (g)-[:SIMILAR_TO]->(sim:Game)
         RETURN g.name AS Gioco,
                g.release_year AS Anno,
                collect(DISTINCT genre.name) AS Generi,
+               collect(DISTINCT mech.name) AS Meccaniche,
+               collect(DISTINCT plat.name) AS Piattaforme,
+               collect(DISTINCT sim.name) AS Giochi_Simili,
                collect(DISTINCT studio.name) AS Sviluppatore,
                count(DISTINCT b) AS Numero_Review,
                collect(DISTINCT {titolo: b.title, angolo: coalesce(b.angle, 'Generico')}) AS Review_Scritte

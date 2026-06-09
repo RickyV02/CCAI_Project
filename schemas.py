@@ -7,19 +7,57 @@ class PlannerIntent(BaseModel):
     game_name: str = Field(default="", description="Nome del gioco se mode='specific', vuoto altrimenti. Se l'utente specifica un gioco, estrai il suo nome CANONICO UFFICIALE (es. estrai 'Silent Hill' e non 'Silent hill 1 ps1'). Allo stesso modo, se l'utente non include il titolo completo del gioco (es. 'Silksong' invece di 'Hollow Knight: Silksong'), tu devi usare quello COMPLETO E UFFICIALE. Serve per la ricerca esatta nel database.")
 
 
-class PlannerOutput(BaseModel):
+class SuggestPlannerOutput(BaseModel):
     """Output strutturato del planner con generazione di un calendario editoriale."""
-    reasoning_process: str = Field(
+    thought_process: list[str] = Field(
         ...,
-        description="Pensa ad alta voce: analizza i giochi e le recensioni nel Knowledge Graph, individua i filoni mancanti e ragiona su quale dovrebbe essere la prossima mossa editoriale."
+        description="FASE 0 (SCRATCHPAD PRIVATO): COMPILA OBBLIGATORIAMENTE QUESTO MODULO:\n"
+                    "1. CAMBIO TEMA: L'utente nel feedback ha chiesto giochi specifici (es. Hades 2, FF6) che NON c'entrano nulla con i criteri originali (es. Horror)? [Sì/No]. Se Sì, scrivi la frase esatta: 'CANCELLO le regole originali. Da ora in poi accetto i nuovi generi richiesti'.\n"
+                    "2. AUDIT GIOCHI RICHIESTI: Per OGNI gioco nominato dall'utente genera una stringa con questo esatto formato:\n"
+                    "   '- Gioco richiesto: [es. Final Fantasy 6] -> Nome canonico ufficiale: [es. Final Fantasy VI] -> Esiste un nome IDENTICO in Blacklist o Catalogo? [Sì/No. ATTENZIONE: Final Fantasy VI non è Final Fantasy Viii. Confronta il nome canonico esatto!] -> Conclusione: [LIBERO / BANNATO]'\n"
+                    "Se non fai questo calcolo per ogni gioco, commetterai un errore critico."
+                    "🚨 IMPORTANZA DEI NOMI CANONICI UFFICIALI: Se l'utente specifica un gioco, estrai il suo nome CANONICO UFFICIALE. Allo stesso modo, se l'utente non include il titolo completo del gioco (es. 'Silksong' invece di 'Hollow Knight: Silksong'), tu devi usare quello COMPLETO E UFFICIALE. Serve per la ricerca esatta nel la blacklist e nel catalogo, ed è un task FONDAMENTALE E CRITICO."
+                    "🚨 EXACT MATCH: Per poter bannare o accettare un gioco, devi fare un confronto ESATTO tra il suo nome canonico ufficiale e i nomi presenti in Blacklist e Catalogo. (es. Final Fantasy 6 NON è Final Fantasy VIII, per cui se non c'è un match esatto tra quello proposto e quello nel catalogo, il gioco proposto è LIBERO)."
+    )
+    feedback_analysis: str = Field(
+        ...,
+        description="FASE 1 (COMUNICAZIONE ALL'UTENTE): Analizza la richiesta in base ai calcoli fatti nella Fase 0.\n"
+                    "🚨 GESTIONE CAMBIO TEMA E DIVIETI:\n"
+                    "- Se nel thought_process hai capito che l'utente ha inserito giochi di altri generi, scrivi CHIARAMENTE: 'Accetto la tua richiesta. Abbandono il vecchio tema e valuto i nuovi giochi'.\n"
+                    "- Se un gioco richiesto è vietato/già recensito, scartalo e avvisa l'utente.\n"
+                    "- Solo se il topic NON è cambiato e l'utente ha chiesto un gioco vietato dello stesso genere di prima, scrivi: 'Non posso recensire [Gioco]. Mantengo inalterato il piano precedente.' e copia la sequenza vecchia.\n"
+                    "Descrivi esattamente cosa farai con sincerità."
+    )
+    catalog_picks: list[str] = Field(
+        ...,
+        description="FASE 2: Scorri il CATALOGO GIOCHI. Elenca i titoli con '✅ LIBERO' CHE CORRISPONDONO ALLA RICHIESTA DELL'UTENTE. "
+                    "🚨 REGOLA PURISTA E FACT-CHECKING (CRITICA): Sii preciso e fai attenzione ai NOMI ESATTI (es. Final Fantasy 6 NON è Final Fantasy Viii). Se l'utente chiede 'Horror', NON inserire titoli Action o Soulslike solo perché hanno atmosfere cupe (es. Sekiro, Dark Souls, A Plague Tale NON sono horror!). Se chiede un anno specifico (es. 2022), usa la tua memoria interna per verificare che il gioco sia DAVVERO uscito in quell'anno. Se nel catalogo non c'è nulla di perfetto, lascia la lista VUOTA []. Meglio vuota che fuori tema. Se richieste dall'utente e necessarie, verifica anche le meccaniche dei giochi e le piattaforme su cui sono disponibili."
+    )
+    extra_candidates: list[str] = Field(
+        ...,
+        description="FASE 3: Se stai confermando il piano precedente, lascia vuoto [].\n"
+                    "IN TUTTI GLI ALTRI CASI: DEVI generare ALMENO 4 GIOCHI DALLA TUA MEMORIA. L'array DEVE avere un minimo assoluto di 4 stringhe. Questo serve a creare un 'buffer' di sicurezza nel caso l'utente abbia chiesto 3 giochi ma uno sia bannato, così avrai dei rimpiazzi validi per riempire il buco!"
+                    "🚨 REGOLA PURISTA E FACT-CHECKING (CRITICA): Anche qui, sii spietato sui generi, sugli anni di uscita e sulle piattaforme. Verifica con la tua memoria. Non inserire giochi del 2024 se è richiesto il 2022. Fai attenzione ai numeri dei capitoli.\n"
+    )
+    reasoning_process: list[str] = Field(
+        default=[],
+        description="FASE 4 (L'AUDIT TOTALE E INVALICABILE): Per OGNI SINGOLO GIOCO elencato in catalog_picks E extra_candidates verifica rigidamente:\n"
+                    "'[Nome] → Nel catalogo con ⛔? [SÌ/NO] → È nella Blacklist? [SÌ/NO. CONFRONTA I NOMI CANONICI!] → Rispetta i criteri della richiesta ATTUALE (Ricorda: se l'utente ha chiesto esplicitamente questo gioco, la risposta è sempre SÌ, anche se rompe i vecchi criteri!)? [SÌ/NO] → ESITO: [APPROVATO/SCARTATO]'."
+    )
+    final_picks: list[str] = Field(
+        default=[],
+        description="FASE 4b: Copia qui SOLO i giochi di catalog_picks ed extra_candidates che hanno ottenuto ESITO 'APPROVATO' nel reasoning_process."
     )
     sequence_of_posts: list[str] = Field(
-    default=[],
-    description="Lista di 3 prossimi argomenti... (se richiesto)."
+        ...,
+        description="FASE 5: Scegli ESATTAMENTE 3 giochi DA 'final_picks' e ordinali strategicamente.\n"
+                    "🚨 REGOLA MATEMATICA CRITICA: L'array DEVE contenere ESATTAMENTE 3 stringhe. Mai 2, mai 4. Se l'utente ha chiesto 3 giochi ma ne hai bannato 1 (es. perché già recensito), DEVI OBBLIGATORIAMENTE riempire il buco pescando un gioco valido dai tuoi 'extra_candidates'. NON LASCIARE MAI LA LISTA A 2 GIOCHI!\n"
+                    "🚨 DIVIETO ASSOLUTO DI ALLUCINAZIONI: Puoi inserire in questa lista SOLO ED ESCLUSIVAMENTE nomi presenti in 'final_picks'. NON INVENTARE NOMI NUOVI QUI DENTRO.\n"
+                    "🚨 ORDINE OBBLIGATORIO: Se nella FASE 0 hai annotato che l'utente vuole un gioco in una posizione specifica, obbedisci."
     )
     justification: str = Field(
         ...,
-        description="Giustificazione strategica dell'ordine della sequenza basata sulle lacune o sui collegamenti del Knowledge Graph."
+        description="Giustificazione strategica dell'ordine della sequenza basata sulle lacune, sulla richiesta dell'utente o sui collegamenti del Knowledge Graph."
     )
     suggested_game: str = Field(
         ...,
@@ -31,7 +69,23 @@ class PlannerOutput(BaseModel):
     )
     plan: str = Field(
         ...,
-        description="Piano editoriale dettagliato esclusivamente per la stesura dell'articolo di oggi sul suggested_game."
+        description="Piano editoriale DETTAGLIATO ESCLUSIVAMENTE per l'articolo di OGGI sul suggested_game."
+        "🚨 DIVIETO ASSOLUTO: Non inserire mai la 'sequence_of_posts' o riferimenti ad articoli futuri in questo campo."
+    )
+
+class SpecificPlannerOutput(BaseModel):
+    """Output strutturato per quando l'utente sceglie un GIOCO SPECIFICO."""
+    reasoning_process: str = Field(
+        ...,
+        description="Pensa ad alta voce: analizza il topic e l'angolo richiesto (se non è stato richiesto un angolo specifico, inventane uno inedito) e pensa a come strutturare l'articolo."
+    )
+    review_angle: str = Field(
+        ...,
+        description="L'angolo della recensione (es. 'Recensione Completa' oppure un angolo specifico come 'Analisi della trama')."
+    )
+    plan: str = Field(
+        ...,
+        description="Piano editoriale dettagliato esclusivamente per la stesura dell'articolo di oggi su questo specifico gioco."
     )
 
 
@@ -71,8 +125,14 @@ class QualityVerdict(BaseModel):
 class PostEntities(BaseModel):
     """Entità estratte dalla review approvata per aggiornare il KG."""
     main_topic: str = Field(..., description="Nome CANONICO UFFICIALE E COMPLETO del videogioco (es. 'Sekiro: Shadows Die Twice' e non solo 'Sekiro'). Usa sempre il titolo completo in stile Wikipedia per evitare duplicati nel database.")
-    post_title: str = Field(..., description="Titolo dell'articolo")
-    review_angle: str = Field(default="", description="Angolo della review (es. 'combat system', 'narrativa')")
+    post_title: str = Field(
+        ...,
+        description="Il titolo ESATTO dell'articolo. Lo trovi alla primissima riga della 'RECENSIONE FINALE' (subito dopo c'è il titolo). Ricopialo fedelmente, NON inventarlo e NON confonderlo con l'angolo!"
+    )
+    review_angle: str = Field(
+        ...,
+        description="L'angolo editoriale finale dell'articolo. 🚨 REGOLA: Analizza il TITOLO e il testo della 'RECENSIONE FINALE'. Se l'articolo si concentra chiaramente su un aspetto specifico (come fa intuire il titolo, es. 'La Storia di...', 'Meccaniche di...'), scrivi il nuovo focus (es. 'Analisi della Storia'). Se l'articolo invece parla un po' di tutto, ricopia ESATTAMENTE il valore di 'ANGOLO ORIGINALE'. NON inserire MAI i generi del gioco (es. 'Survival Horror') in questo campo."
+    )
     bosses: list[str] = Field(default=[], description="Nomi dei boss menzionati")
     mechanics: list[str] = Field(default=[], description="Meccaniche di gioco menzionate")
     characters: list[str] = Field(default=[], description="Personaggi DEL VIDEOGIOCO. NON inserire MAI sviluppatori, direttori o persone reali, a meno che non siano personaggi del videogioco. Se una persona reale è menzionata come parte del gioco, inseriscila SOLO se è chiaramente identificata come personaggio del gioco. Altrimenti, non va inserita.")
