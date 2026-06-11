@@ -11,49 +11,65 @@ class SuggestPlannerOutput(BaseModel):
     """Output strutturato del planner con generazione di un calendario editoriale."""
     thought_process: list[str] = Field(
         ...,
-        description="FASE 0 (SCRATCHPAD PRIVATO): COMPILA OBBLIGATORIAMENTE QUESTO MODULO:\n"
-                    "1. CAMBIO TEMA: L'utente nel feedback ha chiesto giochi specifici (es. Hades 2, FF6) che NON c'entrano nulla con i criteri originali (es. Horror)? [Sì/No]. Se Sì, scrivi la frase esatta: 'CANCELLO le regole originali. Da ora in poi accetto i nuovi generi richiesti'.\n"
-                    "2. AUDIT GIOCHI RICHIESTI: Per OGNI gioco nominato dall'utente genera una stringa con questo esatto formato:\n"
-                    "   '- Gioco richiesto: [es. Final Fantasy 6] -> Nome canonico ufficiale: [es. Final Fantasy VI] -> Esiste un nome IDENTICO in Blacklist o Catalogo? [Sì/No. ATTENZIONE: Final Fantasy VI non è Final Fantasy Viii. Confronta il nome canonico esatto!] -> Conclusione: [LIBERO / BANNATO]'\n"
+        description="FASE 0 (SCRATCHPAD PRIVATO): COMPILA OBBLIGATORIAMENTE QUESTO ELENCO PUNTATO SECONDO LE REGOLE SOTTO:\n"
+                    "1. CHECK TITOLI SPECIFICI: Rispondi esplicitamente: 'L'utente ha chiesto un gioco specifico? [Sì/No]'. (ATTENZIONE: 'giochi horror del 2022' o 'sparatutto' sono categorie generiche di richieste, quindi la risposta è No).\n"
+                    "2. AUDIT GIOCHI RICHIESTI: Se hai risposto 'No' al punto 1, scrivi SOLO 'Nessun gioco specifico nominato' e NON fare nessun audit."
+                    " SE E SOLO SE hai risposto 'Sì' al punto 1, valuta OGNI gioco richiesto dall'utente con questo esatto formato:\n"
+                    "   '- Gioco richiesto: [es. Final Fantasy 6] -> Nome canonico ufficiale: [es. Final Fantasy VI] -> ESISTE UN NOME IDENTICO in Blacklist? [Sì/No. ATTENZIONE: Confronta il nome canonico esatto! Ad esempio, Final Fantasy VI non è Final Fantasy Viii.] -> Presenza nel Catalogo? [No / Sì con ✅ LIBERO / Sì con ⛔ GIÀ RECENSITO. ATTENZIONE: Confronta il nome canonico esatto! Ad esempio, Final Fantasy VI non è Final Fantasy Viii.] -> Conclusione: [BANNATO se è in Blacklist o se è nel Catalogo con ⛔ GIÀ RECENSITO/ LIBERO (dal Catalogo) se ha ✅ LIBERO nel Catalogo / LIBERO (da Memoria) se è del tutto assente sia dalla Blacklist che dal Catalogo]'\n"
                     "Se non fai questo calcolo per ogni gioco, commetterai un errore critico."
+                    "🚨 Fai l'audit SOLO se l'utente ha nominato TITOLI PRECISI (es. 'Madison', 'Hades 2', 'Silent Hill'). Se ha chiesto una categoria generica (es. 'giochi horror del 2022'), scrivi SOLO la frase: 'Nessun gioco specifico nominato'."
                     "🚨 IMPORTANZA DEI NOMI CANONICI UFFICIALI: Se l'utente specifica un gioco, estrai il suo nome CANONICO UFFICIALE. Allo stesso modo, se l'utente non include il titolo completo del gioco (es. 'Silksong' invece di 'Hollow Knight: Silksong'), tu devi usare quello COMPLETO E UFFICIALE. Serve per la ricerca esatta nel la blacklist e nel catalogo, ed è un task FONDAMENTALE E CRITICO."
                     "🚨 EXACT MATCH: Per poter bannare o accettare un gioco, devi fare un confronto ESATTO tra il suo nome canonico ufficiale e i nomi presenti in Blacklist e Catalogo. (es. Final Fantasy 6 NON è Final Fantasy VIII, per cui se non c'è un match esatto tra quello proposto e quello nel catalogo, il gioco proposto è LIBERO)."
     )
     feedback_analysis: str = Field(
         ...,
-        description="FASE 1 (COMUNICAZIONE ALL'UTENTE): Analizza la richiesta in base ai calcoli fatti nella Fase 0.\n"
-                    "🚨 GESTIONE CAMBIO TEMA E DIVIETI:\n"
-                    "- Se nel thought_process hai capito che l'utente ha inserito giochi di altri generi, scrivi CHIARAMENTE: 'Accetto la tua richiesta. Abbandono il vecchio tema e valuto i nuovi giochi'.\n"
-                    "- Se un gioco richiesto è vietato/già recensito, scartalo e avvisa l'utente.\n"
+        description="FASE 1 (COMUNICAZIONE ALL'UTENTE): Analizza la richiesta basandoti ESCLUSIVAMENTE sui calcoli fatti nella Fase 0.\n"
+                    "🚨 GESTIONE CAMBIO TEMA:\n"
+                    "- Se nel thought_process hai rilevato un cambio tema TRAMITE FEEDBACK, scrivi: 'Accetto la tua richiesta. Abbandono il vecchio tema e valuto i nuovi giochi'.\n"
+                    "- Viceversa, se è la prima richiesta o il tema non cambia, scrivi: 'Accetto la richiesta e creo il piano basato su [tuoi criteri]'.\n"
                     "- Solo se il topic NON è cambiato e l'utente ha chiesto un gioco vietato dello stesso genere di prima, scrivi: 'Non posso recensire [Gioco]. Mantengo inalterato il piano precedente.' e copia la sequenza vecchia.\n"
-                    "Descrivi esattamente cosa farai con sincerità."
+                    "🚨 REGOLA ANTI-ALLUCINAZIONE SUI DIVIETI: Avvisa l'utente che un gioco è stato scartato SOLO E UNICAMENTE se nella Fase 0 hai esplicitamente scritto 'Conclusione: BANNATO' per quel titolo specifico. È SEVERAMENTE VIETATO menzionare, inventare o scartare giochi che l'utente non ha mai richiesto, o giochi usati solo come esempi nelle istruzioni. Parla solo ed esclusivamente dei giochi valutati nella Fase 0!"
     )
     catalog_picks: list[str] = Field(
         ...,
-        description="FASE 2: Scorri il CATALOGO GIOCHI. Elenca i titoli con '✅ LIBERO' CHE CORRISPONDONO ALLA RICHIESTA DELL'UTENTE. "
+        description="FASE 2 (COPIA-INCOLLA DAL CATALOGO): Scorri il '🎮 CATALOGO GIOCHI' fornito nel prompt. Estrai i titoli SOLO se rispettano TUTTE queste condizioni:\n"
+                    "1. Sono FISICAMENTE SCRITTI nel '🎮 CATALOGO GIOCHI' del prompt\n"
+                    "2. Hanno l'etichetta '✅ LIBERO'.\n"
+                    "3. Corrispondono alla richiesta dell'utente (l'utente può chiedere giochi sia in termini generali, es. 'horror 2022', sia specifici es. 'Hades').\n Inserisci qui i giochi richiesti dall'utente nella fase di feedback SOLO SE sono fisicamente presenti nell'elenco del catalogo, e soprattutto se hanno '✅ LIBERO'\n."
+                    "🚨 DIVIETO ASSOLUTO DI ALLUCINAZIONE: Se l'utente ti ha chiesto di inserire un gioco specifico (es. 'Madison', 'Hades 2') ma tu NON lo vedi scritto letteralmente nell'elenco del Catalogo con '✅ LIBERO', È SEVERAMENTE VIETATO inserirlo qui. Inserisci i titoli in questo array SOLO ED ESCLUSIVAMENTE se li vedi SCRITTI TESTUALMENTE in quell'elenco con il flag '✅ LIBERO' e se sono pertinenti. I giochi richiesti ma assenti dal catalogo vanno inseriti SOLO negli 'extra_candidates'."
+                    "🚨 REGOLA INFLESSIBILE: Inserisci qui i giochi richiesti dall'utente nella fase di feedback, presenti nel campo 'thought_process' SOLO SE hai risposto alla domanda 'Presenza nel Catalogo?' con 'Sì con ✅ LIBERO'."
+                    "🚨 REGOLA INFLESSIBILE SUI GIOCHI SPECIFICI: Se l'utente ti ha chiesto di inserire un gioco specifico (es. 'Madison'), puoi inserirlo qui SOLO E UNICAMENTE se nel 'thought_process' ha ottenuto la dicitura 'LIBERO (dal Catalogo)'. Se ha ottenuto 'LIBERO (da Memoria)', È SEVERAMENTE VIETATO inserirlo qui e andrà negli extra_candidates.\n"
                     "🚨 REGOLA PURISTA E FACT-CHECKING (CRITICA): Sii preciso e fai attenzione ai NOMI ESATTI (es. Final Fantasy 6 NON è Final Fantasy Viii). Se l'utente chiede 'Horror', NON inserire titoli Action o Soulslike solo perché hanno atmosfere cupe (es. Sekiro, Dark Souls, A Plague Tale NON sono horror!). Se chiede un anno specifico (es. 2022), usa la tua memoria interna per verificare che il gioco sia DAVVERO uscito in quell'anno. Se nel catalogo non c'è nulla di perfetto, lascia la lista VUOTA []. Meglio vuota che fuori tema. Se richieste dall'utente e necessarie, verifica anche le meccaniche dei giochi e le piattaforme su cui sono disponibili."
     )
     extra_candidates: list[str] = Field(
         ...,
-        description="FASE 3: Se stai confermando il piano precedente, lascia vuoto [].\n"
-                    "IN TUTTI GLI ALTRI CASI: DEVI generare ALMENO 4 GIOCHI DALLA TUA MEMORIA. L'array DEVE avere un minimo assoluto di 4 stringhe. Questo serve a creare un 'buffer' di sicurezza nel caso l'utente abbia chiesto 3 giochi ma uno sia bannato, così avrai dei rimpiazzi validi per riempire il buco!"
-                    "🚨 REGOLA PURISTA E FACT-CHECKING (CRITICA): Anche qui, sii spietato sui generi, sugli anni di uscita e sulle piattaforme. Verifica con la tua memoria. Non inserire giochi del 2024 se è richiesto il 2022. Fai attenzione ai numeri dei capitoli.\n"
+        description="FASE 3 (IL MAGAZZINO VINCOLATO - OBBLIGO DI 5 GIOCHI): Se stai confermando il piano precedente, lascia vuoto [].\n"
+                    "IN TUTTI GLI ALTRI CASI: Questo array DEVE contenere SEMPRE ESATTAMENTE 5 GIOCHI DIVERSI Nessuna eccezione e nessuna scusa. Componi l'array seguendo questo rigoroso ordine:\n"
+                    "1. 🚨 VINCOLO SUPREMO SULLE RICHIESTE UTENTE: Inserisci obbligatoriamente TUTTI che nel 'thought_process' siano risultati 'LIBERO (da Memoria)' e che tu non li abbia già messi in 'catalog_picks'. È vietato omettere un gioco libero richiesto!\n"
+                    "2. 🚨 RIEMPIMENTO BUFFER: Dopo aver inserito i giochi richiesti, AGGIUNGI altri titoli pertinenti al nuovo tema pescati dalla tua memoria interna.\n"
+                    "2.5. 🚨 CASO CATEGORIA GENERICA: Se l'utente non ha chiesto titoli specifici ma solo un genere/anno (es. 'horror 2022'), DEVI GENERARE 5 GIOCHI pertinenti attingendo alla tua memoria interna.\n"
+                    "3. 🚨 REGOLA MATEMATICA: Devi raggiungere TASSATIVAMENTE un totale di esattamente 5 elementi in questo campo !!! (es. ['Richiesto1', 'Richiesto2', 'Memoria1', 'Memoria2', 'Memoria3']).\n"
+                    "🚨 DIVIETO DI DOPPIONI: È severamente vietato inserire qui dentro i giochi che hai già inserito in 'catalog_picks'!\n"
+                    "🚨 ATTENZIONE ALLA MATEMATICA, REGOLA INFLESSIBILE: Questo array DEVE contenere SEMPRE ESATTAMENTE 5 GIOCHI. Mai 3, mai 4. È il tuo magazzino di riserva.\n"
+                    "🚨 ERRORE CRITICO: Anche se ti servono solo 3 giochi per il piano finale, il magazzino DEVE fornirne 5."
     )
     reasoning_process: list[str] = Field(
-        default=[],
-        description="FASE 4 (L'AUDIT TOTALE E INVALICABILE): Per OGNI SINGOLO GIOCO elencato in catalog_picks E extra_candidates verifica rigidamente:\n"
-                    "'[Nome] → Nel catalogo con ⛔? [SÌ/NO] → È nella Blacklist? [SÌ/NO. CONFRONTA I NOMI CANONICI!] → Rispetta i criteri della richiesta ATTUALE (Ricorda: se l'utente ha chiesto esplicitamente questo gioco, la risposta è sempre SÌ, anche se rompe i vecchi criteri!)? [SÌ/NO] → ESITO: [APPROVATO/SCARTATO]'."
+        ...,
+        description="FASE 4 (L'AUDIT SEQUENZIALE TOTALE): 🚨 ORDINE E QUANTITÀ OBBLIGATORI: DEVI valutare TUTTI i giochi presenti in 'catalog_picks' e in 'extra_candidates' ESATTAMENTE NELLO STESSO ORDINE in cui li hai scritti nei rispettivi array. Non saltare nessun gioco e non sceglierli a caso!\n"
+                    "🚨 REGOLA MATEMATICA: Se la somma dei giochi in catalog_picks + extra_candidates è 5, DEVI generare TASSATIVAMENTE 5 stringhe in questo array. Fermarsi a 3 è un errore critico.\n"
+                    "Formato obbligatorio per ogni riga:\n"
+                    "'[Nome esatto] → Nel catalogo con ⛔? [SÌ/NO] → È nella Blacklist? [SÌ/NO. CONFRONTA I NOMI CANONICI!] → Rispetta i criteri della richiesta ATTUALE (Ricorda: se l'utente ha chiesto esplicitamente questo gioco, la risposta è sempre SÌ, anche se rompe i vecchi criteri!)? [SÌ/NO] → ESITO: [APPROVATO/SCARTATO]'."
     )
     final_picks: list[str] = Field(
         default=[],
-        description="FASE 4b: Copia qui SOLO i giochi di catalog_picks ed extra_candidates che hanno ottenuto ESITO 'APPROVATO' nel reasoning_process."
+        description="FASE 4b (LA FILTRAZIONE): Copia qui SOLO i giochi che hanno ottenuto ESITO 'APPROVATO' nel reasoning_process, MANTENENDO RIGOROSAMENTE L'ORDINE ORIGINALE. I giochi che l'utente ha esplicitamente richiesto devono assolutamente rimanere nelle primissime posizioni di questa lista!"
     )
     sequence_of_posts: list[str] = Field(
         ...,
-        description="FASE 5: Scegli ESATTAMENTE 3 giochi DA 'final_picks' e ordinali strategicamente.\n"
-                    "🚨 REGOLA MATEMATICA CRITICA: L'array DEVE contenere ESATTAMENTE 3 stringhe. Mai 2, mai 4. Se l'utente ha chiesto 3 giochi ma ne hai bannato 1 (es. perché già recensito), DEVI OBBLIGATORIAMENTE riempire il buco pescando un gioco valido dai tuoi 'extra_candidates'. NON LASCIARE MAI LA LISTA A 2 GIOCHI!\n"
+        description="FASE 5 (LA SEQUENZA): Estrai ESATTAMENTE i PRIMI 3 giochi presenti in 'final_picks'.\n"
+                    "🚨 REGOLA DELLA PRIORITÀ: Se l'utente ha chiesto giochi specifici (es. Madison, Hades 2, FF6) e questi sono stati approvati, DEVONO far parte dei 3 giochi scelti qui dentro. Non sostituirli con altri giochi (es. Bloodborne) se i giochi richiesti sono validi e liberi!\n"
+                    "🚨 REGOLA MATEMATICA CRITICA: L'array DEVE contenere ESATTAMENTE 3 stringhe. Mai 2, mai 4."
                     "🚨 DIVIETO ASSOLUTO DI ALLUCINAZIONI: Puoi inserire in questa lista SOLO ED ESCLUSIVAMENTE nomi presenti in 'final_picks'. NON INVENTARE NOMI NUOVI QUI DENTRO.\n"
-                    "🚨 ORDINE OBBLIGATORIO: Se nella FASE 0 hai annotato che l'utente vuole un gioco in una posizione specifica, obbedisci."
     )
     justification: str = Field(
         ...,
@@ -69,8 +85,10 @@ class SuggestPlannerOutput(BaseModel):
     )
     plan: str = Field(
         ...,
-        description="Piano editoriale DETTAGLIATO ESCLUSIVAMENTE per l'articolo di OGGI sul suggested_game."
-        "🚨 DIVIETO ASSOLUTO: Non inserire mai la 'sequence_of_posts' o riferimenti ad articoli futuri in questo campo."
+        description="Piano editoriale per l'articolo di OGGI.\n"
+                    "🚨 REGOLE DI STESURA (UNA SOLA FRASE): Usa questo esatto template e poi fermati immediatamente.\n"
+                    "Template obbligatorio: 'Oggi recensiremo [Nome del suggested_game], concentrandoci su [review_angle].'\n"
+                    "NON AGGIUNGERE NESSUN'ALTRA PAROLA. Qualsiasi riferimento a giochi successivi provocherà un errore di sistema."
     )
 
 class SpecificPlannerOutput(BaseModel):
@@ -85,7 +103,7 @@ class SpecificPlannerOutput(BaseModel):
     )
     plan: str = Field(
         ...,
-        description="Piano editoriale dettagliato esclusivamente per la stesura dell'articolo di oggi su questo specifico gioco."
+        description="Piano editoriale dettagliato esclusivamente per la stesura dell'articolo di oggi su questo specifico gioco (focus sul [review_angle])."
     )
 
 
