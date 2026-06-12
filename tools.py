@@ -8,6 +8,7 @@ from kg_manager import KGManager
 import os
 import re
 from bs4 import BeautifulSoup
+import trafilatura
 
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1000"))
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "100"))
@@ -38,8 +39,19 @@ def search_tool(query: str) -> str:
             if isinstance(res, dict):
                 raw = res.get("raw_content", "")
                 if raw:
-                    soup = BeautifulSoup(raw, "html.parser")
-                    content = soup.get_text(separator=' ', strip=True)
+                    extracted_text = trafilatura.extract(
+                        raw,
+                        include_comments=False,
+                        include_tables=False,
+                        favor_precision=True
+                    )
+                    if extracted_text:
+                        content = extracted_text
+                        print(f"   [Scraper] 🟢 Trafilatura usato con successo per: {res.get('url', '')}")
+                    else:
+                        soup = BeautifulSoup(raw, "html.parser")
+                        content = soup.get_text(separator=' ', strip=True)
+                        print(f"   [Scraper] 🟡 Fallback su BS4 per: {res.get('url', '')}")
                 else:
                     content = res.get("content", "")
 

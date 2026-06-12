@@ -5,7 +5,8 @@ from mcp.client.stdio import stdio_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 import concurrent.futures
 import traceback
-
+import json
+import ast
 class KGManager:
     """Gestore del Knowledge Graph Neo4j via MCP"""
 
@@ -62,10 +63,10 @@ class KGManager:
 
     def query(self, entity: str) -> str:
         """Interroga il KG per un'entità specifica."""
-        safe_entity = entity.replace("'", "\\'")
+        safe_entity = json.dumps(entity)
         cypher = f"""
         MATCH (g:Game)
-        WHERE toLower(g.name) CONTAINS toLower('{safe_entity}')
+        WHERE toLower(g.name) CONTAINS toLower({safe_entity})
         OPTIONAL MATCH (g)-[:COVERED_IN]->(b:BlogPost)
         OPTIONAL MATCH (g)-[:HAS_BOSS]->(boss:Boss)
         OPTIONAL MATCH (g)-[:USES_MECHANIC]->(mech:Mechanic)
@@ -93,10 +94,10 @@ class KGManager:
 
     def check_existing_reviews(self, topic: str) -> str:
         """Controlla se esistono già review per un gioco specifico."""
-        safe_topic = topic.replace("'", "\\'")
+        safe_topic = json.dumps(topic)
         cypher = f"""
         MATCH (g:Game)-[:COVERED_IN]->(b:BlogPost)
-        WHERE toLower(g.name) CONTAINS toLower('{safe_topic}')
+        WHERE toLower(g.name) CONTAINS toLower({safe_topic})
         RETURN g.name AS Gioco,
                collect(DISTINCT {{titolo: b.title, angolo: coalesce(b.angle, 'Nessun angolo specificato')}}) AS Review_Esistenti,
                count(b) AS Numero_Review
@@ -128,10 +129,10 @@ class KGManager:
 
     def get_entities_for_krag(self, topic: str) -> str:
         """Estrae entità strutturate dal KG per espandere le query RAG."""
-        safe_topic = topic.replace("'", "\\'")
+        safe_topic = json.dumps(topic)
         cypher = f"""
         MATCH (g:Game)
-        WHERE toLower(g.name) CONTAINS toLower('{safe_topic}')
+        WHERE toLower(g.name) CONTAINS toLower({safe_topic})
         OPTIONAL MATCH (g)-[:HAS_BOSS]->(boss:Boss)
         OPTIONAL MATCH (g)-[:USES_MECHANIC]->(mech:Mechanic)
         OPTIONAL MATCH (g)-[:SIMILAR_TO]->(sim:Game)
@@ -175,6 +176,57 @@ class KGManager:
         """
         return self._run_async(self._execute_cypher_async(cypher, "read-cypher"))
 
+    def save_active_plan(self, sequence: list[str]) -> bool:
+        """Salva il nuovo piano editoriale, archiviando il precedente."""
+        safe_seq = json.dumps(sequence)
+        cypher = f"""
+        MATCH (p:EditorialPlan {{status: 'active'}})
+        SET p.status = 'archived'
+        WITH count(p) AS archived
+        CREATE (new_p:EditorialPlan {{status: 'active', sequence: {safe_seq}, created_at: datetime()}})
+        """
+        result = self._run_async(self._execute_cypher_async(cypher, "write-cypher"))
+        return "Errore" not in str(result)
+
+    def get_active_plan_status(self) -> dict | None:
+        """Recupera il piano attivo e verifica dinamicamente quali giochi sono già stati recensiti."""
+        cypher = """
+        MATCH (p:EditorialPlan {status: 'active'})
+        UNWIND p.sequence AS game_name
+        OPTIONAL MATCH (g:Game)-[:COVERED_IN]->(b:BlogPost)
+        WHERE toLower(g.name) = toLower(game_name)
+        RETURN game_name, count(b) > 0 AS is_done
+        """
+        raw = self._run_async(self._execute_cypher_async(cypher, "read-cypher"))
+        try:
+            if "Nessun risultato" in str(raw) or "Errore" in str(raw):
+                return None
+
+            data = json.loads(ast.literal_eval(str(raw))[0]['text'])
+            if not data:
+                return None
+
+            status_list = []
+            next_game = None
+
+            for row in data:
+                game = row.get("game_name")
+                is_done = row.get("is_done", False)
+                status_list.append({"game": game, "done": is_done})
+
+                # Il primo gioco non fatto diventa il "prossimo gioco"
+                if not is_done and not next_game:
+                    next_game = game
+
+            return {
+                "sequence": [s["game"] for s in status_list],
+                "status": status_list,
+                "next_game": next_game
+            }
+        except Exception as e:
+            print(f"Errore parsing piano attivo: {e}")
+            return None
+
     def update(self, post_title: str, topic: str, review_angle: str = "",
                bosses: list = None, mechanics: list = None,
                characters: list = None, claims: list = None,
@@ -185,19 +237,14 @@ class KGManager:
                release_year: int | None = None) -> bool:
         """Aggiorna il KG con le entità estratte dalla review approvata."""
 
-        topic = topic.title()
-        similar_games = [g.title() for g in (similar_games or [])]
-        genres = [g.title() for g in (genres or [])]
-        studios = [s.title() for s in (studios or [])]
-
-        safe_topic = topic.replace("'", "\\'")
-        safe_title = post_title.replace("'", "\\'")
-        safe_angle = review_angle.replace("'", "\\'")
+        safe_topic = json.dumps(topic)
+        safe_title = json.dumps(post_title)
+        safe_angle = json.dumps(review_angle)
 
         cypher_lines = [
-            f"MERGE (g:Game {{name: '{safe_topic}'}})",
-            f"MERGE (b:BlogPost {{title: '{safe_title}'}})",
-            f"ON CREATE SET b.type = 'review', b.angle = '{safe_angle}', b.created_at = datetime()",
+            f"MERGE (g:Game {{name: {safe_topic}}})",
+            f"MERGE (b:BlogPost {{title: {safe_title}}})",
+            f"ON CREATE SET b.type = 'review', b.angle = {safe_angle}, b.created_at = datetime()",
             f"MERGE (g)-[:COVERED_IN]->(b)"
         ]
 
@@ -205,40 +252,31 @@ class KGManager:
             cypher_lines.append(f"SET g.release_year = {release_year}")
 
         if bosses:
-            b_list = "[" + ", ".join([f"'{b.replace(chr(39), chr(92)+chr(39))}'" for b in bosses]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {b_list} | MERGE (boss:Boss {{name: x}}) MERGE (g)-[:HAS_BOSS]->(boss))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(bosses)} | MERGE (boss:Boss {{name: x}}) MERGE (g)-[:HAS_BOSS]->(boss))")
 
         if mechanics:
-            m_list = "[" + ", ".join([f"'{m.replace(chr(39), chr(92)+chr(39))}'" for m in mechanics]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {m_list} | MERGE (mech:Mechanic {{name: x}}) MERGE (g)-[:USES_MECHANIC]->(mech))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(mechanics)} | MERGE (mech:Mechanic {{name: x}}) MERGE (g)-[:USES_MECHANIC]->(mech))")
 
         if claims:
-            c_list = "[" + ", ".join([f"'{c.replace(chr(39), chr(92)+chr(39))}'" for c in claims]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {c_list} | MERGE (claim:Claim {{text: x}}) MERGE (b)-[:CLAIMS]->(claim))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(claims)} | MERGE (claim:Claim {{text: x}}) MERGE (b)-[:CLAIMS]->(claim))")
 
         if sources:
-            s_list = "[" + ", ".join([f"'{s.replace(chr(39), chr(92)+chr(39))}'" for s in sources]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {s_list} | MERGE (src:Source {{url: x}}) MERGE (b)-[:USED_SOURCE]->(src))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(sources)} | MERGE (src:Source {{url: x}}) MERGE (b)-[:USED_SOURCE]->(src))")
 
         if similar_games:
-            sim_list = "[" + ", ".join([f"'{sg.replace(chr(39), chr(92)+chr(39))}'" for sg in similar_games]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {sim_list} | MERGE (sim:Game {{name: x}}) MERGE (g)-[:SIMILAR_TO]->(sim))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(similar_games)} | MERGE (sim:Game {{name: x}}) MERGE (g)-[:SIMILAR_TO]->(sim))")
 
         if genres:
-            g_list = "[" + ", ".join([f"'{g.replace(chr(39), chr(92)+chr(39))}'" for g in genres]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {g_list} | MERGE (gen:Genre {{name: x}}) MERGE (g)-[:PART_OF_GENRE]->(gen))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(genres)} | MERGE (gen:Genre {{name: x}}) MERGE (g)-[:PART_OF_GENRE]->(gen))")
 
         if studios:
-            st_list = "[" + ", ".join([f"'{s.replace(chr(39), chr(92)+chr(39))}'" for s in studios]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {st_list} | MERGE (studio:Studio {{name: x}}) MERGE (g)-[:DEVELOPED_BY]->(studio))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(studios)} | MERGE (studio:Studio {{name: x}}) MERGE (g)-[:DEVELOPED_BY]->(studio))")
 
         if platforms:
-            p_list = "[" + ", ".join([f"'{p.replace(chr(39), chr(92)+chr(39))}'" for p in platforms]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {p_list} | MERGE (plat:Platform {{name: x}}) MERGE (g)-[:AVAILABLE_ON]->(plat))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(platforms)} | MERGE (plat:Platform {{name: x}}) MERGE (g)-[:AVAILABLE_ON]->(plat))")
 
         if characters:
-            ch_list = "[" + ", ".join([f"'{c.replace(chr(39), chr(92)+chr(39))}'" for c in characters]) + "]"
-            cypher_lines.append(f"FOREACH (x IN {ch_list} | MERGE (char:Character {{name: x}}) MERGE (g)-[:HAS_CHARACTER]->(char))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(characters)} | MERGE (char:Character {{name: x}}) MERGE (g)-[:HAS_CHARACTER]->(char))")
 
         final_cypher = "\n".join(cypher_lines)
         result = self._run_async(self._execute_cypher_async(final_cypher, "write-cypher"))

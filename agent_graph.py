@@ -18,7 +18,7 @@ from schemas import (
     PlannerIntent, SuggestPlannerOutput, SpecificPlannerOutput, GameResearchExtraction,
     QualityVerdict, PostEntities, FeedbackRouting, PlanApprovalRouting
 )
-from helpers import create_react_entry, format_extraction_for_writer, truncate_text, format_blacklist_for_llm, format_catalog_for_llm
+from helpers import create_react_entry, format_extraction_for_writer, truncate_text, format_blacklist_for_llm, format_catalog_for_llm, format_kg_context, format_existing_reviews, format_similarity_catalog, format_krag_entities, format_recent_posts_for_writer
 from tools import (
     search_tool, rag_retrieval_tool, knowledge_graph_tool,
     deep_read_article, youtube_transcript_fetcher,
@@ -50,12 +50,31 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     user_in = state['user_input'].strip()
     reasoning = []
 
-    # Step 1: Capire l'intento dell'utente
+    # Step 1: Capire l'intento dell'utente e leggere la memoria di sistema
+    active_plan = kg_manager.get_active_plan_status()
+    system_context = ""
+
+    # Se c'è un piano, "iniettiamo" la consapevolezza nel prompt dell'LLM
+    if active_plan and active_plan.get("next_game"):
+        next_g = active_plan["next_game"]
+        system_context = (
+            f"\n\n🚨 CONTESTO DI SISTEMA: Nel database c'è un piano editoriale attivo. "
+            f"Il prossimo gioco in coda da recensire è '{next_g}'. "
+            f"Se l'utente accetta, acconsente o fa affermazioni generiche di conferma (es. 'ok', 'vai', 'procedi', 'continua il piano'), oppure semplicemente preme invio (input vuoto)"
+            f"DEVI scegliere 'specific' ed estrarre come game_name ESATTAMENTE '{next_g}'."
+        )
+    else:
+        system_context = (
+            f"\n\n🚨 CONTESTO DI SISTEMA: ATTENZIONE, al momento NON c'è nessun piano editoriale in sospeso. "
+            f"Se l'utente usa frasi generiche come 'ok', 'vai avanti', 'procedi' SENZA specificare fisicamente il nome di un gioco, "
+            f"DEVI scegliere 'suggest' in modo da creare in automatico un nuovo piano editoriale da zero."
+        )
+
     intent_messages = [
         ("system", "Sei un assistente AI. Il tuo compito è classificare l'intento dell'utente.\n"
-                   "Scegli 'suggest' se l'utente chiede un piano editoriale o un suggerimento.\n"
-                   "Scegli 'specific' SOLO E UNICAMENTE se l'utente digita il nome di un videogioco specifico da recensire."),
-        ("user", f"L'utente dice: '{user_in}'. Ha specificato un gioco preciso da recensire o vuole un suggerimento?")
+                   "Scegli 'suggest' se l'utente chiede un NUOVO piano editoriale o un suggerimento.\n"
+                   "Scegli 'specific' se l'utente indica un videogioco preciso (es. 'Facciamo Zelda'), OPPURE se accetta di procedere con il piano attivo." + system_context),
+        ("user", f"L'utente dice: '{user_in}'. Ha specificato un gioco, confermato il piano, o vuole un suggerimento?")
     ]
     if user_in in _INTENT_CACHE:
         intent = _INTENT_CACHE[user_in]
@@ -158,12 +177,21 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
         topic = plan_result.suggested_game
 
+        try:
+            kg_manager.save_active_plan(plan_result.sequence_of_posts)
+            reasoning.append(create_react_entry(
+                "planner", "Piano editoriale salvato in memoria persistente (Neo4j)",
+                "kg_manager.save_active_plan()", str(plan_result.sequence_of_posts)
+            ))
+        except Exception as e:
+            print(f"[Warning] Impossibile salvare il piano nel KG: {e}")
+
     # ==========================================
     # BINARIO B: MODALITÀ GIOCO SPECIFICO
     # ==========================================
     else:
         topic = intent.game_name or user_in
-        existing_reviews = kg_manager.check_existing_reviews(topic)
+        existing_reviews = format_existing_reviews(kg_manager.check_existing_reviews(topic))
 
         reasoning.append(create_react_entry(
             "planner", f"L'utente vuole recensire '{topic}'. Interrogo il KG.",
@@ -172,8 +200,9 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
         existing_str = str(existing_reviews)
         has_existing = (
-            existing_str and "Nessun" not in existing_str and "Errore" not in existing_str and
-            '"Numero_Review": 0' not in existing_str and "'text': '[]'" not in existing_str
+            existing_str and
+            "Nessuna recensione esistente" not in existing_str and
+            "Errore" not in existing_str
         )
 
         if has_existing:
@@ -196,11 +225,8 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
                 existing_str = str(existing_reviews)
                 has_existing = (
                     existing_str and
-                    "Nessun" not in existing_str and
-                    "Errore" not in existing_str and
-                    '"Numero_Review": 0' not in existing_str and
-                    "'text': '[]'" not in existing_str and
-                    '"text": "[]"' not in existing_str
+                    "Nessuna recensione esistente" not in existing_str and
+                    "Errore" not in existing_str
                 )
 
                 reasoning.append(create_react_entry(
@@ -239,7 +265,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
 
         reasoning.append(create_react_entry("planner", f"RAGIONAMENTO DEL DIRETTORE:\n{plan_result.reasoning_process}", "llm.with_structured_output(SpecificPlannerOutput)", f"Piano generato: angolo '{plan_result.review_angle}'"))
 
-    kg_context = kg_manager.query(topic)
+    kg_context = format_kg_context(kg_manager.query(topic))
 
     return {
         "reasoning_trace": reasoning,
@@ -281,7 +307,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
 
         # 1B: KG query per K-RAG
         print(f"    [Fase 1] Query KG per entità K-RAG: '{topic}'")
-        kg_entities = kg_manager.get_entities_for_krag(topic)
+        kg_entities = format_krag_entities(kg_manager.get_entities_for_krag(topic))
         tool_outputs["knowledge_graph_tool"] = [str(kg_entities)]
         reasoning.append(create_react_entry(
             "researcher", "Interrogo il KG per entità da usare come query RAG espanse (K-RAG)",
@@ -330,16 +356,16 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         f"Il tuo obiettivo principale è soddisfare questo Focus Editoriale: '{review_angle}'.\n"
         f"- SE IL FOCUS È GENERALE (es. 'Recensione Completa e Generale'): Non usare 'STOP' finché non hai trovato: 1. Trama generale e contesto narrativo, 2. Gameplay e meccaniche principali, 3. Dati tecnici (Anno, piattaforme, sviluppatore).\n"
         f"- SE IL FOCUS È SPECIFICO (es. 'Sistema di combattimento'): La tua priorità ASSOLUTA è trovare informazioni iper-dettagliate su '{review_angle}'. IGNORA i punti della checklist se non c'entrano nulla con il tuo focus (es., se il focus è la storia, ignora elementi come il gameplay o i combattimenti)! Trova solo i Dati Tecnici di base per inquadrare il gioco, e poi sprofonda nella ricerca del tuo argomento specifico.\n"
-        f"- DEVI aver usato 'deep_read_article' su ALMENO DUE URL DISTINTI (es. prima leggi Wikipedia, poi DEVI leggere anche una testata come IGN o Multiplayer). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
+        f"- REGOLA DELLE DUE FONTI: DEVI approfondire ALMENO DUE FONTI DISTINTE per avere prospettive diverse. Puoi farlo leggendo due articoli web diversi (usando 'deep_read_article') OPPURE leggendo un articolo e analizzando la trascrizione di un video saggio (usando 'youtube_transcript_fetcher' e poi 'deep_read_article'). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
         f"- Se hai letto con la deep read almeno due URL diversi, poi decidi tu quale approfondire aumentando gli offset per leggere il resto dell'articolo.\n"
         f"- Se le ricerche iniziali (Tavily/RAG) non bastano, INVENTA NUOVE QUERY mirate (es. se il focus è la lore, cerca 'Silent Hill spiegazione finale' o 'Silent Hill simbolismi').\n\n"
 
         f"🚨 DIRETTIVE TECNICHE SUI TOOL (DA RISPETTARE RIGOROSAMENTE):\n"
         f"- GIOCO BASE: Cerca info solo su '{topic}'. Scarta DLC, Mod o Spinoff.\n"
         f"- VALUTAZIONE FONTI: Prima di usare 'deep_read_article', leggi lo snippet del 'search_tool'. Se lo snippet contiene parole che ti fanno pensare a siti che includano informazioni INUTILI (per esempio un sito di compravendita di videogiochi) IGNORA QUEL LINK. Non sprecare iterazioni a leggerlo. Usa piuttosto il tuo ragionamento per fare una nuova query più specifica (es. 'Silent Hill recensione trama')\n"
-        f"- LETTURA PROFONDA: La semplice ricerca web dà solo riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset. Cerca di approfondire SOLO articoli di testate giornalistiche, recensioni, wiki o guide.\n"
+        f"- LETTURA PROFONDA: La semplice ricerca web dà solo riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset. IN ALTERNATIVA, le video-recensioni o i video-saggi su YouTube sono considerati fonti ECCELLENTI e di altissima qualità, quindi usa 'youtube_transcript_fetcher' per estrarre la trascrizione e poi la 'deep_read_article' per leggerne il contenuto passando l'URL del video (esattamente come per i siti web)!.\n"
         f"- USO DEL RAG: Il tool 'rag_retrieval_tool' non serve solo per cercare il titolo del gioco. Puoi e DEVI usarlo passandogli DOMANDE DISCORSIVE specifiche per approfondire la tua conoscenza del gioco (es. 'Come funziona il sistema di cura?', 'Chi è il boss finale?'). Il RAG ti risponderà pescando dai chunk salvati!\n"
-        f"- VIDEO YOUTUBE: Se trovi un video interessante, usa `youtube_transcript_fetcher` per estrarre la trascrizione e cercare info rilevanti al suo interno.\n"
+        f"- VIDEO YOUTUBE: Per trovare video, fai una query con 'search_tool' aggiungendo la parola chiave (es. 'Silent Hill recensione youtube' o 'Elden ring lore youtube video'). Quando trovi un URL YouTube nei risultati, usa IMMEDIATAMENTE 'youtube_transcript_fetcher' su quell'URL per generare la trascrizione E POI, SUBITO DOPO, usa 'deep_read_article' passandogli lo STESSO URL di YouTube (offset=0, limit=5) per leggerne i paragrafi come se fosse un normale articolo web. Se la trascrizione è lunga e ti servono altre info, richiama il tool aumentando l'offset.\n"
         f"- CHIAMATA SINTATTICA TOOL: Usa esclusivamente l'interfaccia nativa invisibile per chiamare i tool. Il tuo output testuale deve contenere SOLO il tuo ragionamento in linguaggio naturale e poi invoca i tool usando ESATTAMENTE e SOLO il loro nome (es. 'search_tool'). È severamente vietato concatenare o fondere gli argomenti JSON direttamente nel nome del tool e/o scrivere tag XML.\n"
         f"- KNOWLEDGE GRAPH: Usa 'knowledge_graph_tool' per dubbi o fact-checking veloce sugli aspetti del topic.\n\n"
         f"- REGOLA APPROFONDIMENTO DELLE DUE FONTI: Non usare l'azione 'STOP' se hai esplorato un solo dominio web. Anche se il primo sito (es. Wikipedia) ti ha dato tutte le informazioni, DEVI usare 'deep_read_article' su un secondo URL di una testata giornalistica per avere un parere critico prima di terminare la ricerca.\n"
@@ -447,7 +473,7 @@ def summarizer_node(state: AgentState) -> Dict[str, Any]:
         elif results and str(results).strip():
             all_research.append(f"[{tool_name}]: {results}")
 
-    research_text = truncate_text("\n\n".join(all_research), 25000) # Limite token per l'estrazione, preferisco tagliare qui che rischiare di superare il limite durante l'estrazione e perdere tutto il contesto
+    research_text = truncate_text("\n\n".join(all_research), 15000) # Limite token per l'estrazione, preferisco tagliare qui che rischiare di superare il limite durante l'estrazione e perdere tutto il contesto
 
     system_prompt = (
         f"Sei un analista di ricerca enciclopedico. Il tuo compito è leggere i dati forniti ed ESTRARRE ogni singolo dettaglio rilevante.\n"
@@ -505,7 +531,7 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
     review_angle = state.get('planning_information', {}).get('review_angle', '')
     human_feedback = state.get('human_feedback', '').strip()
 
-    recent_posts = kg_manager.get_recent_posts(limit=3)
+    recent_posts = format_recent_posts_for_writer(kg_manager.get_recent_posts(limit=3))
 
     system_prompt = f"""Sei un blogger esperto di videogiochi.
 Devi scrivere un ARTICOLO su '{topic}'.
@@ -782,7 +808,7 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
     research_summary = state.get('research_summary', '')
     plan_info = state.get('planning_information', {})
 
-    similarity_catalog = kg_manager.get_catalog_for_similarity()
+    similarity_catalog = format_similarity_catalog(kg_manager.get_catalog_for_similarity())
 
     system_prompt = (
         "Sei un analista dati senior. Il tuo compito è estrarre TUTTI i dati fattuali da una recensione e dai suoi appunti di ricerca per popolare un Knowledge Graph enciclopedico.\n"

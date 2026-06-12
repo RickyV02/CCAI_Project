@@ -3,6 +3,7 @@ import uuid
 from dotenv import load_dotenv
 from agent_graph import graph
 from langgraph.types import Command
+from tools import kg_manager
 
 load_dotenv()
 
@@ -67,18 +68,29 @@ def main():
     print(" 📝 Modalità: Solo Recensioni")
     print("=" * 50)
 
-    print("\nCosa vuoi fare?")
-    print("  1. Scrivi il nome del gioco da recensire")
-    print("  2. Scrivi 'suggerisci' per far scegliere all'agente il piano editoriale")
-    print()
-    user_input = input("👤 Il tuo input: ").strip()
+    # Il main interroga Neo4j SOLO PER MOSTRARE L'INTERFACCIA GRAFICA TESTUALE
+    print("\n⏳ Controllo memoria di sistema in Neo4j...")
+    active_plan = kg_manager.get_active_plan_status()
 
-    if not user_input:
+    if active_plan and active_plan["next_game"]:
+        print("\n 📅 PIANO EDITORIALE IN CORSO:")
+        for item in active_plan["status"]:
+            check = "✅" if item["done"] else "⏳"
+            print(f"  {check} {item['game']}")
+        print(f"\n💡 Prossimo articolo in coda: '{active_plan['next_game']}'")
+        print("👉 (Puoi scrivermi 'ok procedi', chiedermi un altro gioco bonus, o 'suggerisci un nuovo piano')")
+    else:
+        if active_plan:
+            print("\n✅ Hai completato tutti i giochi del piano precedente!")
+        print("\n👉 Cosa facciamo oggi? (Scrivi un gioco o chiedimi un suggerimento)")
+
+    user_input = input("\n👤 Tu: ").strip()
+
+    if not user_input and active_plan and active_plan["next_game"]:
+        user_input = "ok, procedi"
+    elif not user_input:
         print("Input vuoto. Uscita.")
         return
-
-    if user_input.lower() in ["suggerisci", "suggeriscimi", "dimmi tu", "consiglia"]:
-        user_input = "Suggeriscimi tu un gioco da recensire oggi basandoti su cosa non abbiamo ancora coperto."
 
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 

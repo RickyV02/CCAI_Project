@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class PlannerIntent(BaseModel):
     """Capisce se l'utente vuole un gioco specifico o un suggerimento."""
-    mode: str = Field(..., description="'specific' se l'utente ha indicato un gioco preciso, 'suggest' se vuole un suggerimento")
+    mode: str = Field(..., description="'specific' se l'utente ha indicato un gioco preciso o ha confermato il prossimo gioco del piano attivo, 'suggest' se vuole un suggerimento/un nuovo piano editoriale.")
     game_name: str = Field(default="", description="Nome del gioco se mode='specific', vuoto altrimenti. Se l'utente specifica un gioco, estrai il suo nome CANONICO UFFICIALE (es. estrai 'Silent Hill' e non 'Silent hill 1 ps1'). Allo stesso modo, se l'utente non include il titolo completo del gioco (es. 'Silksong' invece di 'Hollow Knight: Silksong'), tu devi usare quello COMPLETO E UFFICIALE. Serve per la ricerca esatta nel database.")
 
 
@@ -48,21 +48,23 @@ class SuggestPlannerOutput(BaseModel):
                     "1. 🚨 VINCOLO SUPREMO SULLE RICHIESTE UTENTE: Inserisci obbligatoriamente TUTTI che nel 'thought_process' siano risultati 'LIBERO (da Memoria)' e che tu non li abbia già messi in 'catalog_picks'. È vietato omettere un gioco libero richiesto!\n"
                     "2. 🚨 RIEMPIMENTO BUFFER: Dopo aver inserito i giochi richiesti, AGGIUNGI altri titoli pertinenti al nuovo tema pescati dalla tua memoria interna.\n"
                     "2.5. 🚨 CASO CATEGORIA GENERICA: Se l'utente non ha chiesto titoli specifici ma solo un genere/anno (es. 'horror 2022'), DEVI GENERARE 5 GIOCHI pertinenti attingendo alla tua memoria interna.\n"
-                    "3. 🚨 REGOLA MATEMATICA: Devi raggiungere TASSATIVAMENTE un totale di esattamente 5 elementi in questo campo !!! (es. ['Richiesto1', 'Richiesto2', 'Memoria1', 'Memoria2', 'Memoria3']).\n"
+                    "3. 🚨 REGOLA MATEMATICA INVALICABILE: Anche se hai già trovato 3 o più giochi validi nel 'catalog_picks', SEI OBBLIGATO a generare ESATTAMENTE 5 stringhe in questo array. Conta fino a 5 prima di chiudere l'array! Devi raggiungere TASSATIVAMENTE un totale di esattamente 5 elementi in questo campo !!!\n"
                     "🚨 DIVIETO DI DOPPIONI: È severamente vietato inserire qui dentro i giochi che hai già inserito in 'catalog_picks'!\n"
                     "🚨 ATTENZIONE ALLA MATEMATICA, REGOLA INFLESSIBILE: Questo array DEVE contenere SEMPRE ESATTAMENTE 5 GIOCHI. Mai 3, mai 4. È il tuo magazzino di riserva.\n"
                     "🚨 ERRORE CRITICO: Anche se ti servono solo 3 giochi per il piano finale, il magazzino DEVE fornirne 5."
     )
     reasoning_process: list[str] = Field(
         ...,
-        description="FASE 4 (L'AUDIT SEQUENZIALE TOTALE): 🚨 ORDINE E QUANTITÀ OBBLIGATORI: DEVI valutare TUTTI i giochi presenti in 'catalog_picks' e in 'extra_candidates' ESATTAMENTE NELLO STESSO ORDINE in cui li hai scritti nei rispettivi array. Non saltare nessun gioco e non sceglierli a caso!\n"
-                    "🚨 REGOLA MATEMATICA: Se la somma dei giochi in catalog_picks + extra_candidates è 5, DEVI generare TASSATIVAMENTE 5 stringhe in questo array. Fermarsi a 3 è un errore critico.\n"
+        description="FASE 4 (L'AUDIT SEQUENZIALE TOTALE): 🚨 ORDINE E QUANTITÀ OBBLIGATORI: DEVI valutare TUTTI i giochi presenti in 'catalog_picks' e in 'extra_candidates' ESATTAMENTE NELLO STESSO ORDINE E NELLA LORO TOTALITÀ in cui li hai scritti nei rispettivi array. Non saltare nessun gioco e non sceglierli a caso!\n"
+                    "🚨 REGOLA MATEMATICA (ESEMPIO): Se la somma dei giochi in catalog_picks + extra_candidates è 5, DEVI generare TASSATIVAMENTE 5 stringhe in questo array. Se la loro somma è diversa da 5, ad esempio 7, ovviamente vale la stessa regola, devi valutarli TUTTI e 7 (e cosi via in generale per qualsiasi altro numero totale di elementi). Fermarsi prima di averli controllati e valutati tutti singolarmente è un errore critico.\n"
+                    "🚨 LOGICA DI APPROVAZIONE (CRITICA): L'esito finale NON è a tua discrezione, ma segue un'equazione logica rigida. Se per un gioco la risposta è 'SÌ' alla presenza nel catalogo con ⛔, OPPURE è 'SÌ' alla presenza in Blacklist, OPPURE è 'NO' al rispetto dei criteri, L'ESITO DEVE ESSERE TASSATIVAMENTE 'SCARTATO'. L'esito è 'APPROVATO' SE E SOLO SE il gioco ottiene contemporaneamente questi tre valori esatti: (⛔? NO), (Blacklist? NO), (Criteri? SÌ).\n"
                     "Formato obbligatorio per ogni riga:\n"
                     "'[Nome esatto] → Nel catalogo con ⛔? [SÌ/NO] → È nella Blacklist? [SÌ/NO. CONFRONTA I NOMI CANONICI!] → Rispetta i criteri della richiesta ATTUALE (Ricorda: se l'utente ha chiesto esplicitamente questo gioco, la risposta è sempre SÌ, anche se rompe i vecchi criteri!)? [SÌ/NO] → ESITO: [APPROVATO/SCARTATO]'."
     )
     final_picks: list[str] = Field(
         default=[],
         description="FASE 4b (LA FILTRAZIONE): Copia qui SOLO i giochi che hanno ottenuto ESITO 'APPROVATO' nel reasoning_process, MANTENENDO RIGOROSAMENTE L'ORDINE ORIGINALE. I giochi che l'utente ha esplicitamente richiesto devono assolutamente rimanere nelle primissime posizioni di questa lista!"
+                    "🚨 ATTENZIONE, DEVI RICOPIARE TUTTI I GIOCHI CHE HANNO OTTENUTO ESITO 'APPROVATO' nel reasoning_process, NON UN LORO SOTTOINSIEME !!!"
     )
     sequence_of_posts: list[str] = Field(
         ...,
