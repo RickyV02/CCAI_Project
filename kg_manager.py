@@ -7,14 +7,17 @@ import concurrent.futures
 import traceback
 import json
 import ast
+
+from config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE
+
 class KGManager:
     """Gestore del Knowledge Graph Neo4j via MCP"""
 
     def __init__(self):
-        self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.username = os.getenv("NEO4J_USERNAME", "neo4j")
-        self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
-        self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        self.uri = NEO4J_URI
+        self.username = NEO4J_USERNAME
+        self.password = NEO4J_PASSWORD
+        self.database = NEO4J_DATABASE
 
         self.server_params = StdioServerParameters(
             command="python",

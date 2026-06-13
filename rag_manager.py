@@ -1,14 +1,8 @@
-import os
-from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
-load_dotenv()
-
-RAG_PERSIST_DIRECTORY = os.getenv("RAG_PERSIST_DIRECTORY", "./chroma_db")
-RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-RAG_RETRIEVE_K = int(os.getenv("RAG_RETRIEVE_K", "5"))
+from config import RAG_PERSIST_DIRECTORY, RAG_EMBEDDING_MODEL, RAG_RETRIEVE_K
 
 class RAGManager:
     """Gestore del database vettoriale ChromaDB."""

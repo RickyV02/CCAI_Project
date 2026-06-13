@@ -5,13 +5,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from rag_manager import RAGManager
 from kg_manager import KGManager
-import os
+from config import RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
 import re
 from bs4 import BeautifulSoup
 import trafilatura
-
-RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1000"))
-RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "100"))
 
 rag_manager = RAGManager()
 kg_manager = KGManager()

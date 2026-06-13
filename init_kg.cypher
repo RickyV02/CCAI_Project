@@ -148,18 +148,35 @@ MERGE (hk)-[:HAS_BOSS]->(radia) MERGE (hk)-[:USES_MECHANIC]->(roll);
 // ==========================================
 // 7. RELAZIONI: PIATTAFORME
 // ==========================================
-MATCH (pc:Platform {name:"PC"}), (ps5:Platform {name:"PlayStation 5"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"}), (switch:Platform {name:"Nintendo Switch"})
+MATCH (er:Game {name:"Elden Ring"}), (pc:Platform {name:"PC"}), (ps5:Platform {name:"PlayStation 5"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (er)-[:AVAILABLE_ON]->(pc) MERGE (er)-[:AVAILABLE_ON]->(ps5) MERGE (er)-[:AVAILABLE_ON]->(ps4) MERGE (er)-[:AVAILABLE_ON]->(xbox);
 
-MATCH (er:Game {name:"Elden Ring"}) MERGE (er)-[:AVAILABLE_ON]->(pc) MERGE (er)-[:AVAILABLE_ON]->(ps5) MERGE (er)-[:AVAILABLE_ON]->(ps4) MERGE (er)-[:AVAILABLE_ON]->(xbox);
-MATCH (ds3:Game {name:"Dark Souls III"}) MERGE (ds3)-[:AVAILABLE_ON]->(pc) MERGE (ds3)-[:AVAILABLE_ON]->(ps4) MERGE (ds3)-[:AVAILABLE_ON]->(xbox);
-MATCH (sek:Game {name:"Sekiro"}) MERGE (sek)-[:AVAILABLE_ON]->(pc) MERGE (sek)-[:AVAILABLE_ON]->(ps4) MERGE (sek)-[:AVAILABLE_ON]->(xbox);
-MATCH (bb:Game {name:"Bloodborne"}) MERGE (bb)-[:AVAILABLE_ON]->(ps4);
-MATCH (cp:Game {name:"Cyberpunk 2077"}) MERGE (cp)-[:AVAILABLE_ON]->(pc) MERGE (cp)-[:AVAILABLE_ON]->(ps5) MERGE (cp)-[:AVAILABLE_ON]->(ps4) MERGE (cp)-[:AVAILABLE_ON]->(xbox);
-MATCH (bg3:Game {name:"Baldur's Gate 3"}) MERGE (bg3)-[:AVAILABLE_ON]->(pc) MERGE (bg3)-[:AVAILABLE_ON]->(ps5) MERGE (bg3)-[:AVAILABLE_ON]->(xbox);
-MATCH (re2:Game {name:"Resident Evil 2 Remake"}) MERGE (re2)-[:AVAILABLE_ON]->(pc) MERGE (re2)-[:AVAILABLE_ON]->(ps5) MERGE (re2)-[:AVAILABLE_ON]->(ps4) MERGE (re2)-[:AVAILABLE_ON]->(xbox);
-MATCH (hades:Game {name:"Hades"}) MERGE (hades)-[:AVAILABLE_ON]->(pc) MERGE (hades)-[:AVAILABLE_ON]->(switch) MERGE (hades)-[:AVAILABLE_ON]->(ps5) MERGE (hades)-[:AVAILABLE_ON]->(ps4) MERGE (hades)-[:AVAILABLE_ON]->(xbox);
-MATCH (gow:Game {name:"God of War"}) MERGE (gow)-[:AVAILABLE_ON]->(pc) MERGE (gow)-[:AVAILABLE_ON]->(ps4);
-MATCH (hk:Game {name:"Hollow Knight"}) MERGE (hk)-[:AVAILABLE_ON]->(pc) MERGE (hk)-[:AVAILABLE_ON]->(switch) MERGE (hk)-[:AVAILABLE_ON]->(ps4) MERGE (hk)-[:AVAILABLE_ON]->(xbox);
+MATCH (ds3:Game {name:"Dark Souls III"}), (pc:Platform {name:"PC"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (ds3)-[:AVAILABLE_ON]->(pc) MERGE (ds3)-[:AVAILABLE_ON]->(ps4) MERGE (ds3)-[:AVAILABLE_ON]->(xbox);
+
+MATCH (sek:Game {name:"Sekiro"}), (pc:Platform {name:"PC"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (sek)-[:AVAILABLE_ON]->(pc) MERGE (sek)-[:AVAILABLE_ON]->(ps4) MERGE (sek)-[:AVAILABLE_ON]->(xbox);
+
+MATCH (bb:Game {name:"Bloodborne"}), (ps4:Platform {name:"PlayStation 4"})
+MERGE (bb)-[:AVAILABLE_ON]->(ps4);
+
+MATCH (cp:Game {name:"Cyberpunk 2077"}), (pc:Platform {name:"PC"}), (ps5:Platform {name:"PlayStation 5"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (cp)-[:AVAILABLE_ON]->(pc) MERGE (cp)-[:AVAILABLE_ON]->(ps5) MERGE (cp)-[:AVAILABLE_ON]->(ps4) MERGE (cp)-[:AVAILABLE_ON]->(xbox);
+
+MATCH (bg3:Game {name:"Baldur's Gate 3"}), (pc:Platform {name:"PC"}), (ps5:Platform {name:"PlayStation 5"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (bg3)-[:AVAILABLE_ON]->(pc) MERGE (bg3)-[:AVAILABLE_ON]->(ps5) MERGE (bg3)-[:AVAILABLE_ON]->(xbox);
+
+MATCH (re2:Game {name:"Resident Evil 2 Remake"}), (pc:Platform {name:"PC"}), (ps5:Platform {name:"PlayStation 5"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (re2)-[:AVAILABLE_ON]->(pc) MERGE (re2)-[:AVAILABLE_ON]->(ps5) MERGE (re2)-[:AVAILABLE_ON]->(ps4) MERGE (re2)-[:AVAILABLE_ON]->(xbox);
+
+MATCH (hades:Game {name:"Hades"}), (pc:Platform {name:"PC"}), (switch:Platform {name:"Nintendo Switch"}), (ps5:Platform {name:"PlayStation 5"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (hades)-[:AVAILABLE_ON]->(pc) MERGE (hades)-[:AVAILABLE_ON]->(switch) MERGE (hades)-[:AVAILABLE_ON]->(ps5) MERGE (hades)-[:AVAILABLE_ON]->(ps4) MERGE (hades)-[:AVAILABLE_ON]->(xbox);
+
+MATCH (gow:Game {name:"God of War"}), (pc:Platform {name:"PC"}), (ps4:Platform {name:"PlayStation 4"})
+MERGE (gow)-[:AVAILABLE_ON]->(pc) MERGE (gow)-[:AVAILABLE_ON]->(ps4);
+
+MATCH (hk:Game {name:"Hollow Knight"}), (pc:Platform {name:"PC"}), (switch:Platform {name:"Nintendo Switch"}), (ps4:Platform {name:"PlayStation 4"}), (xbox:Platform {name:"Xbox Series X"})
+MERGE (hk)-[:AVAILABLE_ON]->(pc) MERGE (hk)-[:AVAILABLE_ON]->(switch) MERGE (hk)-[:AVAILABLE_ON]->(ps4) MERGE (hk)-[:AVAILABLE_ON]->(xbox);
 
 // ==========================================
 // 8. SIMILARITY TRA GIOCHI

@@ -1,11 +1,9 @@
+import config
 import os
 import uuid
-from dotenv import load_dotenv
 from agent_graph import graph
 from langgraph.types import Command
 from tools import kg_manager
-
-load_dotenv()
 
 def validate_env():
     """Verifica che tutte le variabili d'ambiente necessarie siano presenti."""

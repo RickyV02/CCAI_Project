@@ -1,9 +1,5 @@
-import os
 import json
-from dotenv import load_dotenv
 from datetime import datetime
-
-load_dotenv()
 
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
@@ -25,14 +21,11 @@ from tools import (
     kg_manager, rag_manager
 )
 
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.5"))
-POST_LENGTH_GUIDANCE = os.getenv("POST_LENGTH_GUIDANCE", "1000 parole circa")  # Indicazione di lunghezza per il writer
-MAX_QUALITY_RETRIES = int(os.getenv("MAX_QUALITY_RETRIES", "1"))
-RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1000"))
-RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "100"))
-MAX_RESEARCHER_ITERATIONS = int(os.getenv("MAX_RESEARCHER_ITERATIONS", "5")) # Previene ricorsione infinita durante la fase di ricerca (LangGraph ha un suo limite nativo, ma lo abbassiamo noi a mano per evitare loop e consumo di token API eccessivo)
-# Potremmo anche dare dei limiti nel system prompt del researcher, ma preferisco lasciare più libertà all'LLM e intervenire solo se vediamo che tende ad abusare di iterazioni o tool calls (e sprecare token API)
+from config import (
+    LLM_MODEL, LLM_TEMPERATURE, POST_LENGTH_GUIDANCE,
+    MAX_QUALITY_RETRIES, MAX_RESEARCHER_ITERATIONS,
+    RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
+)
 
 # LLM principale
 llm = ChatGroq(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
@@ -356,7 +349,8 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         f"Il tuo obiettivo principale è soddisfare questo Focus Editoriale: '{review_angle}'.\n"
         f"- SE IL FOCUS È GENERALE (es. 'Recensione Completa e Generale'): Non usare 'STOP' finché non hai trovato: 1. Trama generale e contesto narrativo, 2. Gameplay e meccaniche principali, 3. Dati tecnici (Anno, piattaforme, sviluppatore).\n"
         f"- SE IL FOCUS È SPECIFICO (es. 'Sistema di combattimento'): La tua priorità ASSOLUTA è trovare informazioni iper-dettagliate su '{review_angle}'. IGNORA i punti della checklist se non c'entrano nulla con il tuo focus (es., se il focus è la storia, ignora elementi come il gameplay o i combattimenti)! Trova solo i Dati Tecnici di base per inquadrare il gioco, e poi sprofonda nella ricerca del tuo argomento specifico.\n"
-        f"- REGOLA DELLE DUE FONTI: DEVI approfondire ALMENO DUE FONTI DISTINTE per avere prospettive diverse. Puoi farlo leggendo due articoli web diversi (usando 'deep_read_article') OPPURE leggendo un articolo e analizzando la trascrizione di un video saggio (usando 'youtube_transcript_fetcher' e poi 'deep_read_article'). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
+        f"- REGOLA DELLE DUE FONTI (OBBLIGATORIA): DEVI approfondire ALMENO DUE FONTI DISTINTE per avere prospettive diverse. Puoi farlo leggendo due articoli web diversi (usando 'deep_read_article') OPPURE leggendo un articolo e analizzando la trascrizione di un video saggio (usando 'youtube_transcript_fetcher' e poi 'deep_read_article'). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
+        f"- REGOLA DI LETTURA RAPIDA: Non leggere MAI un singolo articolo fino alla fine se è troppo lungo! Usa la deep_read_article al massimo DUE VOLTE sullo stesso URL (es. offset 0 e poi offset 5). Dopodiché FERMATI e usa le iterazioni rimaste per leggere obbligatoriamente un SECONDO URL. Preferisco avere l'inizio di due articoli diversi piuttosto che la fine di un solo articolo.\n" #Serve solo per testare che l'agente legga più fonti e che si focussa su una sola a causa del cap sulle iterazioni massime!
         f"- Se hai letto con la deep read almeno due URL diversi, poi decidi tu quale approfondire aumentando gli offset per leggere il resto dell'articolo.\n"
         f"- Se le ricerche iniziali (Tavily/RAG) non bastano, INVENTA NUOVE QUERY mirate (es. se il focus è la lore, cerca 'Silent Hill spiegazione finale' o 'Silent Hill simbolismi').\n\n"
 
@@ -366,7 +360,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         f"- LETTURA PROFONDA: La semplice ricerca web dà solo riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset. IN ALTERNATIVA, le video-recensioni o i video-saggi su YouTube sono considerati fonti ECCELLENTI e di altissima qualità, quindi usa 'youtube_transcript_fetcher' per estrarre la trascrizione e poi la 'deep_read_article' per leggerne il contenuto passando l'URL del video (esattamente come per i siti web)!.\n"
         f"- USO DEL RAG: Il tool 'rag_retrieval_tool' non serve solo per cercare il titolo del gioco. Puoi e DEVI usarlo passandogli DOMANDE DISCORSIVE specifiche per approfondire la tua conoscenza del gioco (es. 'Come funziona il sistema di cura?', 'Chi è il boss finale?'). Il RAG ti risponderà pescando dai chunk salvati!\n"
         f"- VIDEO YOUTUBE: Per trovare video, fai una query con 'search_tool' aggiungendo la parola chiave (es. 'Silent Hill recensione youtube' o 'Elden ring lore youtube video'). Quando trovi un URL YouTube nei risultati, usa IMMEDIATAMENTE 'youtube_transcript_fetcher' su quell'URL per generare la trascrizione E POI, SUBITO DOPO, usa 'deep_read_article' passandogli lo STESSO URL di YouTube (offset=0, limit=5) per leggerne i paragrafi come se fosse un normale articolo web. Se la trascrizione è lunga e ti servono altre info, richiama il tool aumentando l'offset.\n"
-        f"- CHIAMATA SINTATTICA TOOL: Usa esclusivamente l'interfaccia nativa invisibile per chiamare i tool. Il tuo output testuale deve contenere SOLO il tuo ragionamento in linguaggio naturale e poi invoca i tool usando ESATTAMENTE e SOLO il loro nome (es. 'search_tool'). È severamente vietato concatenare o fondere gli argomenti JSON direttamente nel nome del tool e/o scrivere tag XML.\n"
+        f"🚨 - CHIAMATA SINTATTICA TOOL: Usa ESCLUSIVAMENTE il sistema nativo di tool calling. È SEVERAMENTE VIETATO scrivere nel testo tag inventati come <function=...>, <tool> o simili. Se devi chiamare un tool, fallo tramite l'API senza inquinare il testo con sintassi XML o JSON !!!\n"
         f"- KNOWLEDGE GRAPH: Usa 'knowledge_graph_tool' per dubbi o fact-checking veloce sugli aspetti del topic.\n\n"
         f"- REGOLA APPROFONDIMENTO DELLE DUE FONTI: Non usare l'azione 'STOP' se hai esplorato un solo dominio web. Anche se il primo sito (es. Wikipedia) ti ha dato tutte le informazioni, DEVI usare 'deep_read_article' su un secondo URL di una testata giornalistica per avere un parere critico prima di terminare la ricerca.\n"
         f"- ISOLAMENTO DELLA SAGA E GIOCO ESATTO: Cerca info ESCLUSIVAMENTE sul gioco '{topic}'. SCARTA CATEGORICAMENTE link o info su prequel, sequel (es. Silent Hill 2), film omonimi o capitoli futuri (es. Silent Hill f). Nelle tue query (Web e RAG), usa parole chiave per disambiguare (es. 'Silent Hill 1999 PS1 trama').\n"
@@ -382,7 +376,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
 
     tool_map = {t.name: t for t in optional_tools}
 
-    for i in range(MAX_RESEARCHER_ITERATIONS):
+    for i in range(MAX_RESEARCHER_ITERATIONS): #Aumentando il cap delle iterazioni, aumentiamo la precisione della ricerca ma sprechiamo token (quindi è un valore di compromesso).
         try:
             response = llm_with_tools.invoke(messages)
             messages.append(response)
