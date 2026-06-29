@@ -242,7 +242,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             user_prompt_content += (
                 "🚨 REGOLA SULL'ANGOLO: Analizza il feedback dell'utente. "
                 "Se contiene SOLO una conferma generica (es. 'ok', 'va bene', 'procedi', 'sì'), "
-                "ignora il feedback e inventa tu un angolo INEDITO, CONTROLLANDO che non sia già stato trattato.\n"
+                "ignora il feedback e inventa tu un angolo INEDITO, CONTROLLANDO che non sia già stato trattato nelle review esistenti.\n"
                 "Se invece l'utente ha richiesto un focus specifico (es. 'parliamo della trama', 'solo i boss', 'ok, fai la grafica'), "
                 "DEVI ASSOLUTAMENTE impostare il campo 'review_angle' su quella specifica richiesta!\n"
             )
@@ -281,7 +281,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     print("--- [ResearcherNode] Ricerca informazioni ---")
 
     topic = state['user_input']
-    kg_context = state.get('kg_context', '')
+    kg_context = state.get('kg_context', '') # Non più usato, ma lo lascio per eventuali future estensioni
     feedback = state.get('human_feedback', '')
     review_angle = state.get('planning_information', {}).get('review_angle', 'Recensione Generale')
     reasoning = []
@@ -337,9 +337,12 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
             f"Concentrati ESCLUSIVAMENTE sulle mancanze o sul nuovo FEEDBACK DELL'UTENTE."
         )
 
+    # Per rendere la ricerca più mirata, potremmo pensare di aggiungere come contesto iniziale i dati già raccolti nella fase deterministica (web search + RAG). Questo può aiutare l'agente a evitare di ripetere ricerche già fatte e a concentrarsi su nuove informazioni o approfondimenti specifici richiesti dall'utente.
+    # Tuttavia, mi piace anche l'idea che l'agente cerchi informazioni completamente "blind", senza essere influenzato da ciò che è già stato trovato, per evitare bias. Quindi preferisco lasciarlo libero e unire le informazioni di fase 1 e fase 2 solo alla fine, quando l'agente deve fare il report finale (nel nodo Summarizer). In questo modo, la fase 2 può essere più creativa e flessibile, mentre la fase 1 garantisce una base solida di informazioni.
+
     system_prompt = (
         f"Sei un instancabile e meticoloso ricercatore per un blog di videogiochi.\n"
-        f"Devi cercare informazioni enciclopediche e critiche su '{topic}'. Contesto dal KG: {truncate_text(kg_context, 500)}\n"
+        f"Devi cercare informazioni enciclopediche e critiche su '{topic}'.\n"
         f"{already_known}\n"
         f"🚨 FOCUS DELLA RICERCA: L'angolo editoriale è '{review_angle}'.\n"
         f"Se è un angolo specifico, orienta le tue query (web e RAG) su quel singolo aspetto; se è generale, copri tutti gli aspetti del gioco.\n"
@@ -349,24 +352,26 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         f"Il tuo obiettivo principale è soddisfare questo Focus Editoriale: '{review_angle}'.\n"
         f"- SE IL FOCUS È GENERALE (es. 'Recensione Completa e Generale'): Non usare 'STOP' finché non hai trovato: 1. Trama generale e contesto narrativo, 2. Gameplay e meccaniche principali, 3. Dati tecnici (Anno, piattaforme, sviluppatore).\n"
         f"- SE IL FOCUS È SPECIFICO (es. 'Sistema di combattimento'): La tua priorità ASSOLUTA è trovare informazioni iper-dettagliate su '{review_angle}'. IGNORA i punti della checklist se non c'entrano nulla con il tuo focus (es., se il focus è la storia, ignora elementi come il gameplay o i combattimenti)! Trova solo i Dati Tecnici di base per inquadrare il gioco, e poi sprofonda nella ricerca del tuo argomento specifico.\n"
-        f"- REGOLA DELLE DUE FONTI (OBBLIGATORIA): DEVI approfondire ALMENO DUE FONTI DISTINTE per avere prospettive diverse. Puoi farlo leggendo due articoli web diversi (usando 'deep_read_article') OPPURE leggendo un articolo e analizzando la trascrizione di un video saggio (usando 'youtube_transcript_fetcher' e poi 'deep_read_article'). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
-        f"- REGOLA DI LETTURA RAPIDA: Non leggere MAI un singolo articolo fino alla fine se è troppo lungo! Usa la deep_read_article al massimo DUE VOLTE sullo stesso URL (es. offset 0 e poi offset 5). Dopodiché FERMATI e usa le iterazioni rimaste per leggere obbligatoriamente un SECONDO URL. Preferisco avere l'inizio di due articoli diversi piuttosto che la fine di un solo articolo.\n" #Serve solo per testare che l'agente legga più fonti e che si focussa su una sola a causa del cap sulle iterazioni massime!
-        f"- Se hai letto con la deep read almeno due URL diversi, poi decidi tu quale approfondire aumentando gli offset per leggere il resto dell'articolo.\n"
+        f"- Usa search_tool per trovare pagine web e salvarle in memoria (l'output del tool saranno gli URL e i titoli delle pagine web trovate e scaricate). Poi hai due strade: usa rag_retrieval_tool facendo domande specifiche per pescare risposte mirate da tutto ciò che hai scaricato, OPPURE usa deep_read_article su un URL specifico per leggere quell'articolo da cima a fondo in modo lineare.\n"
+        f"- REGOLA DELLE DUE FONTI (OBBLIGATORIA): DEVI approfondire ALMENO DUE FONTI DISTINTE per avere prospettive diverse. Puoi farlo leggendo due articoli web diversi (usando 'deep_read_article') OPPURE leggendo un articolo e analizzando la trascrizione di un video saggio (usando 'youtube_transcript_fetcher' e poi 'deep_read_article' sull'URL del video). Non basta leggere lo stesso articolo in più parti usando l'offset! Questo ti serve per avere più prospettive sul topic!\n"
+        f"- REGOLA DI LETTURA RAPIDA: Non leggere MAI un singolo articolo fino alla fine se è troppo lungo! Usa la deep_read_article al massimo DUE VOLTE sullo stesso URL (es. offset 0 e poi offset 5). Dopodiché FERMATI e usa le iterazioni rimaste per leggere obbligatoriamente un SECONDO URL. Preferisco avere l'inizio di due articoli diversi piuttosto che la fine di un solo articolo.\n" #Serve solo per testare che l'agente legga più fonti e che si focussa su una sola a causa del cap sulle iterazioni massime! (Se la ignora e ne legge solo uno, non importa)
+        f"- Se hai letto con la 'deep_read_article' almeno due URL diversi, poi decidi tu quale approfondire, tra quelli già letti, aumentando gli offset per leggere il resto dell'articolo.\n"
         f"- Se le ricerche iniziali (Tavily/RAG) non bastano, INVENTA NUOVE QUERY mirate (es. se il focus è la lore, cerca 'Silent Hill spiegazione finale' o 'Silent Hill simbolismi').\n\n"
+        f"🚨 DIVIETO DI ALLUCINAZIONE DEGLI URL: È SEVERAMENTE VIETATO inventare, dedurre o generare URL dalla tua memoria interna. Puoi passare al tool youtube_transcript_fetcher o deep_read_article ESCLUSIVAMENTE link fisicamente presenti e stampati nell'output del search_tool o del rag_retrieval_tool. Se ti serve un video YouTube ma non ne hai trovato nessuno, DEVI prima fare una nuova query di ricerca web per trovarne uno reale."
 
         f"🚨 DIRETTIVE TECNICHE SUI TOOL (DA RISPETTARE RIGOROSAMENTE):\n"
         f"- GIOCO BASE: Cerca info solo su '{topic}'. Scarta DLC, Mod o Spinoff.\n"
-        f"- VALUTAZIONE FONTI: Prima di usare 'deep_read_article', leggi lo snippet del 'search_tool'. Se lo snippet contiene parole che ti fanno pensare a siti che includano informazioni INUTILI (per esempio un sito di compravendita di videogiochi) IGNORA QUEL LINK. Non sprecare iterazioni a leggerlo. Usa piuttosto il tuo ragionamento per fare una nuova query più specifica (es. 'Silent Hill recensione trama')\n"
-        f"- LETTURA PROFONDA: La semplice ricerca web dà solo riassunti. Quindi devi usarla se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset. IN ALTERNATIVA, le video-recensioni o i video-saggi su YouTube sono considerati fonti ECCELLENTI e di altissima qualità, quindi usa 'youtube_transcript_fetcher' per estrarre la trascrizione e poi la 'deep_read_article' per leggerne il contenuto passando l'URL del video (esattamente come per i siti web)!.\n"
+        f"- La PRIMA tool call della sessione DEVE essere sempre 'knowledge_graph_tool' usando come query il topic esatto. Non usare nessun altro tool (search_tool, rag_retrieval_tool, deep_read_article, youtube_transcript_fetcher) prima di aver interrogato il Knowledge Graph. Interrogarlo è fondamentale per pianificare le tue query successive, per tuoi eventuali dubbi o fact-checking veloce sugli aspetti del topic. Dopo averlo interrogato, puoi passare ad usare gli altri tool. Se il risultato della query al KG è incompleto o vuoto, non è un problema, usa tutti gli altri tool a tua disposizione per trovare informazioni sul topic!\n\n"
+        f"- VALUTAZIONE FONTI: Prima di usare 'deep_read_article', leggi il risultato di 'search_tool' per capire cosa è stato trovato (URL e titoli delle pagine web), poi usa 'rag_retrieval_tool' facendo domande mirate sul gioco per leggere gli articoli scaricati. Se il risultato contiene parole che ti fanno pensare a siti che includano informazioni INUTILI (per esempio un sito di compravendita di videogiochi) IGNORA QUEL LINK. Non sprecare iterazioni a leggerlo. Usa piuttosto il tuo ragionamento per fare una nuova query più specifica (es. 'Silent Hill recensione trama'), decidendo se conviene usarla per cercare informazioni su internet tramite il 'search_tool' (SE sono stati tornati risultati inutili o dalla ricerca web o dal RAG), oppure per fare query mirate nel RAG tramite il 'rag_retrieval_tool' (se magari in precedenza non erano stati esaustivi i risultati).\n"
+        f"- LETTURA PROFONDA: La semplice ricerca web, unita all'utilizzo del 'rag_retrieval_tool', dà poche informazioni. Quindi devi usarli se hai bisogno di una panoramica generale o di trovare nuove informazioni. Se un URL giornalistico è promettente (es. IGN, Wikipedia, Everyeye), USA SUBITO 'deep_read_article' per leggerlo (es. offset=0, limit=5). Inizia leggendo i primi paragrafi (es. offset=0, limit=5). Se l'articolo è lungo e ti servono altre info, richiama il tool aumentando l'offset (MA PUOI FARLO SOLO DOPO AVER ESPLORATO ALMENO DUE FONTI DIVERSE). IN ALTERNATIVA, le video-recensioni o i video-saggi su YouTube sono considerati fonti ECCELLENTI e di altissima qualità, quindi usa 'youtube_transcript_fetcher' per estrarre la trascrizione e poi la 'deep_read_article' per leggerne il contenuto passando l'URL del video.\n"
         f"- USO DEL RAG: Il tool 'rag_retrieval_tool' non serve solo per cercare il titolo del gioco. Puoi e DEVI usarlo passandogli DOMANDE DISCORSIVE specifiche per approfondire la tua conoscenza del gioco (es. 'Come funziona il sistema di cura?', 'Chi è il boss finale?'). Il RAG ti risponderà pescando dai chunk salvati!\n"
-        f"- VIDEO YOUTUBE: Per trovare video, fai una query con 'search_tool' aggiungendo la parola chiave (es. 'Silent Hill recensione youtube' o 'Elden ring lore youtube video'). Quando trovi un URL YouTube nei risultati, usa IMMEDIATAMENTE 'youtube_transcript_fetcher' su quell'URL per generare la trascrizione E POI, SUBITO DOPO, usa 'deep_read_article' passandogli lo STESSO URL di YouTube (offset=0, limit=5) per leggerne i paragrafi come se fosse un normale articolo web. Se la trascrizione è lunga e ti servono altre info, richiama il tool aumentando l'offset.\n"
-        f"🚨 - CHIAMATA SINTATTICA TOOL: Usa ESCLUSIVAMENTE il sistema nativo di tool calling. È SEVERAMENTE VIETATO scrivere nel testo tag inventati come <function=...>, <tool> o simili. Se devi chiamare un tool, fallo tramite l'API senza inquinare il testo con sintassi XML o JSON !!!\n"
-        f"- KNOWLEDGE GRAPH: Usa 'knowledge_graph_tool' per dubbi o fact-checking veloce sugli aspetti del topic.\n\n"
-        f"- REGOLA APPROFONDIMENTO DELLE DUE FONTI: Non usare l'azione 'STOP' se hai esplorato un solo dominio web. Anche se il primo sito (es. Wikipedia) ti ha dato tutte le informazioni, DEVI usare 'deep_read_article' su un secondo URL di una testata giornalistica per avere un parere critico prima di terminare la ricerca.\n"
-        f"- ISOLAMENTO DELLA SAGA E GIOCO ESATTO: Cerca info ESCLUSIVAMENTE sul gioco '{topic}'. SCARTA CATEGORICAMENTE link o info su prequel, sequel (es. Silent Hill 2), film omonimi o capitoli futuri (es. Silent Hill f). Nelle tue query (Web e RAG), usa parole chiave per disambiguare (es. 'Silent Hill 1999 PS1 trama').\n"
+        f"- VIDEO YOUTUBE: Per trovare specificatamente video, fai una query con 'search_tool' aggiungendo la parola chiave (es. 'Silent Hill recensione youtube' o 'Elden ring lore youtube video'). Quando trovi un URL YouTube nei risultati, usa IMMEDIATAMENTE 'youtube_transcript_fetcher' su quell'URL per generare la trascrizione E POI, SUBITO DOPO, usa 'deep_read_article' passandogli lo STESSO URL di YouTube (offset=0, limit=5) per leggerne i paragrafi come se fosse un normale articolo web. Se la trascrizione è lunga e ti servono altre info, richiama il tool aumentando l'offset.\n"
+        f"🚨 - CHIAMATA SINTATTICA DEI TOOL (CRITICO): Per invocare un tool, NON DEVI MAI scrivere la chiamata manualmente all'interno del tuo messaggio di testo. Non usare MAI finti tag HTML o XML. Devi semplicemente scrivere il tuo ragionamento discorsivo e poi usare la funzione integrata 'tool_calls' del tuo modello per passare gli argomenti al sistema in background.\n"
+        f"- REGOLA APPROFONDIMENTO DELLE DUE FONTI: Non usare l'azione 'STOP' se hai esplorato un solo dominio web. Anche se il primo sito (es. Wikipedia) ti ha dato tutte le informazioni, DEVI usare 'deep_read_article' su un secondo URL di una testata giornalistica o video youtube per avere un parere critico prima di terminare la ricerca.\n"
+        f"- ISOLAMENTO DELLA SAGA E GIOCO ESATTO: Cerca info ESCLUSIVAMENTE sul gioco '{topic}'. SCARTA CATEGORICAMENTE link o info su prequel, sequel, film omonimi o capitoli futuri (es., se stai analizzando Silent Hill, scarta informazioni su Silent Hill 2, Silent Hill f, ecc...). Nelle tue query (Web e RAG), usa parole chiave per disambiguare (es. 'Silent Hill 1999 PS1 trama').\n"
 
         f"⏳ ATTENZIONE: Hai un limite rigido di ITERAZIONI. Cerca di essere chirurgico e completare la Checklist il più velocemente possibile prima di esaurirle.\n"
-        f"PENSA AD ALTA VOCE: Prima di usare qualsiasi tool, scrivi sempre una frase spiegando quale informazione ti manca e PERCHÉ stai per usare quel tool."
+        f"🚨 PENSA AD ALTA VOCE (OBBLIGATORIO): Prima di usare qualsiasi tool, scrivi SEMPRE una frase spiegando quale informazione ti manca e PERCHÉ stai per usare quel tool."
     )
 
     messages = [
@@ -418,10 +423,16 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
 
         except Exception as e:
             reasoning.append(create_react_entry(
-                "researcher", f"Errore nel ReAct loop: {e}",
+                "researcher", f"Errore nel ReAct loop: {str(e)}",
                 "llm_with_tools.invoke()", str(e)
             ))
-            break
+            messages.append({
+                "role": "user",
+                "content": f"🚨 ERRORE DI SISTEMA: La tua ultima risposta ha generato un errore API: {str(e)}. "
+                           f"Hai probabilmente usato una sintassi inventata come <function=...>. "
+                           f"Ti ricordo che DEVI usare ESCLUSIVAMENTE il Tool Calling nativo in formato JSON. Riprova."
+            })
+            continue
 
     reasoning.append(create_react_entry(
         "researcher", "Ricerca completata (Fase 1 + Fase 2)",
@@ -467,7 +478,7 @@ def summarizer_node(state: AgentState) -> Dict[str, Any]:
         elif results and str(results).strip():
             all_research.append(f"[{tool_name}]: {results}")
 
-    research_text = truncate_text("\n\n".join(all_research), 15000) # Limite token per l'estrazione, preferisco tagliare qui che rischiare di superare il limite durante l'estrazione e perdere tutto il contesto
+    research_text = truncate_text("\n\n".join(all_research), 15000) # Troncamento per rientrare nel limite di token del modello.
 
     system_prompt = (
         f"Sei un analista di ricerca enciclopedico. Il tuo compito è leggere i dati forniti ed ESTRARRE ogni singolo dettaglio rilevante.\n"
@@ -557,6 +568,7 @@ RICCHEZZA DEI DETTAGLI (PER IL DATABASE DEL BLOG):
 
 CITAZIONI CROSS-POST E STILE BLOG:
 - TITOLO ACCATTIVANTE (H1): La primissima riga del testo deve essere un Titolo (H1) giornalistico, creativo e a effetto (es. "Lies of P: Il lato oscuro della fiaba di Collodi"). È SEVERAMENTE VIETATO usare titoli banali come "Benvenuti nel mondo di..." o incollare la dicitura asettica "una recensione completa e generale". Sii un vero copywriter!
+- DIVISIONE IN PARAGRAFI: L'articolo deve essere diviso in paragrafi, ognuno con un sottotitolo (H2 o H3) che introduca l'argomento del paragrafo. Non scrivere un unico blocco di testo.
 - Usa il tono tipico di un blog. Se appropriato, nell'introduzione puoi salutare i lettori e fare riferimento agli ultimi articoli pubblicati (elencati in 'ULTIMI POST SUL BLOG') dicendo ad esempio: "Dopo avervi parlato di [Gioco Precedente], oggi ci dedicheremo... (ovviamente questo è solo un esempio!, cerca di essere creativo ma preciso in ciò che dici rispetto alla verità del blog e delle fonti)".
 - Usa il 'CONTESTO DEL GIOCO' per menzionare giochi simili o vecchi capitoli dello stesso studio in modo naturale.
 - PARAGONI VIDEOLUDICI (OPZIONALE E CONDIZIONALE): Inserisci paragoni con altri videogiochi SOLO SE hanno un reale senso critico ed editoriale (es. per ovvie somiglianze di gameplay, atmosfera o genere). Puoi usare i giochi presenti nel 'CONTESTO DEL GIOCO' o nel 'MATERIALE DI RICERCA'. 🚨 REGOLA AUREA: Se i giochi a tua disposizione non c'entrano nulla con il topic (es. paragonare uno sparatutto a un survival horror in modo illogico), NON FARE NESSUN PARAGONE. La naturalezza del testo viene prima di tutto.
@@ -586,7 +598,7 @@ PIANO EDITORIALE DA SEGUIRE (come riferimento):
         user_message = (
             f"🚨 REVISIONE EDITORIALE OBBLIGATORIA 🚨\n"
             f"Il Direttore Responsabile ha rifiutato la bozza precedente e ti ha dato questo ordine diretto:\n"
-            f"\"{human_feedback}\"\n\n"
+            f"\"🚨 {human_feedback}\"\n\n"
             f"Riscrivi l'INTERA recensione obbedendo ciecamente a questo feedback. "
             f"Se ti ha chiesto un angolo diverso/un focus specifico, DEVI OBBLIGATORIAMENTE rispettare quella richiesta e focalizzarti pesantemente su quell'aspetto, anche se va contro il focus editoriale originale. Viceversa, se non è stato detto nulla in merito a focus editoriali/angoli dell'articolo, attieniti al piano editoriale/focus che hai/sai già. "
             f"Se ti ha chiesto una LINGUA DIVERSA (es. Inglese), l'intero testo generato DEVE essere in quella lingua. "
@@ -622,7 +634,7 @@ def quality_check_node(state: AgentState) -> Command[Literal["human_review", "wr
     system_prompt = (
         "Sei un Senior Editor spietato di un blog di videogiochi.\n"
         "Valuta se la bozza della recensione rispetta questi standard minimi:\n"
-        "1. Contiene dettagli specifici (nomi boss, meccaniche, aree)?\n"
+        "1. Contiene dettagli specifici (nomi boss, meccaniche, aree, ecc...)?\n"
         "2. Cita le fonti in modo naturale?\n"
         "3. Ha un hook iniziale coinvolgente?\n"
         "4. Ha una conclusione con opinione netta?\n"
@@ -776,6 +788,10 @@ def human_review_node(state: AgentState) -> Command[Literal["memory_updater", "w
         "reasoning_trace": reasoning
     }
 
+    # Se torniamo al writer o al researcher per riscrivere la recensione, resettiamo il contatore delle revisioni per evitare che un feedback successivo venga interpretato come un ulteriore ciclo di revisione invece che come un nuovo feedback su una nuova bozza.
+    if goto_node in ["writer", "researcher"]:
+        update_data["revision_count"] = 0
+
     # Se l'utente vuole cambiare gioco, dobbiamo fare un HARD RESET della memoria globale!
     if goto_node == "planner":
         update_data["user_input"] = feedback
@@ -784,6 +800,7 @@ def human_review_node(state: AgentState) -> Command[Literal["memory_updater", "w
         update_data["research_summary"] = ""       # Svuotiamo i riassunti vecchi
         update_data["draft_post"] = ""             # Cancelliamo la bozza vecchia
         update_data["planning_information"] = {}   # Resettiamo il piano
+        update_data["revision_count"] = 0          # Resettiamo il contatore delle revisioni
 
         _INTENT_CACHE.clear()
         _PLAN_CACHE.clear()
@@ -808,6 +825,7 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
         "Sei un analista dati senior. Il tuo compito è estrarre TUTTI i dati fattuali da una recensione e dai suoi appunti di ricerca per popolare un Knowledge Graph enciclopedico.\n"
         "🚨 REGOLA COMPLETEZZA: Usa gli appunti di ricerca per riempire tutti i buchi tecnici (Anno di uscita, Piattaforme, Studio di sviluppo, Genere, Personaggi) anche se la recensione non li cita esplicitamente.\n"
         "🚨 REGOLA ONTOLOGICA: Distingui rigorosamente i TITOLI dei giochi dai GENERI. 'Soulslike', 'Action RPG', 'Open World', 'Roguelike', 'Metroidvania', 'Survival Horror' sono GENERI e non giochi.\n"
+        "🚨 REGOLA FONTI: Quando estrai le 'sources', estrai ESCLUSIVAMENTE IL NOME della testata giornalistica/blog/wiki ecc.. (es. 'IGN', 'Everyeye', 'Wikipedia'). Ignora e rimuovi categoricamente gli URL completi (es. 'https://...'). Questo serve per raggruppare i nodi nel database.\n"
         "🚨 REGOLA DI NORMALIZZAZIONE: Quando estrai il nome di un gioco, uno studio o un genere, scrivilo SEMPRE in Title Case (iniziali maiuscole, es. 'Survival Horror')."
         "🚨 REGOLA FONDAMENTALE SUI GIOCHI SIMILI: Non farti ingannare dall'introduzione dell'articolo. I giochi citati nei saluti iniziali come 'post precedenti' NON E' DETTO CHE SIANO giochi simili. Estrai solo i veri paragoni videoludici."
         "🚨 REGOLA PER L'ANGOLO: Analizza il TITOLO e il testo della 'RECENSIONE FINALE'.\n"
@@ -817,7 +835,7 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
         "🚨 REGOLA DELL'ARRAY VUOTO: Se l'articolo NON fa paragoni videoludici reali e diretti tra le meccaniche o la lore, devi TASSATIVAMENTE lasciare l'array 'similar_games' VUOTO []. Non inserire MAI i giochi citati nell'introduzione come recensioni passate, A MENO CHE NON SIANO DAVVERO POI GIOCHI SIMILI (lo capisci dal contesto della recensione generale). Meglio un array vuoto che un dato falso."
         "🚨 DEDUZIONE GIOCHI SIMILI:\n"
         "1. Cerca nel testo della recensione se l'autore ha citato esplicitamente altri giochi come paragoni DI SOMIGLIANZA e aggiungili all'elenco.\n"
-        "2. IN AGGIUNTA ai giochi del testo, GUARDA TUTTO IL CATALOGO DELLE SOMIGLIANZE. Confronta i 'Generi' e le 'Meccaniche' del topic con quelli del catalogo. Se c'è una forte sovrapposizione (es. entrambi sono 'Survival Horror' o usano 'Stealth') o appartengono allo stesso ramo di genere/sviluppatore (o alla stessa serie/saga/franchise), inserisci i titoli dal catalogo nell'array 'similar_games', aggiungi anche questi titoli all'array 'similar_games'.\n"
+        "2. IN AGGIUNTA ai giochi del testo, GUARDA TUTTO IL CATALOGO DELLE SOMIGLIANZE. Confronta i 'Generi' e le 'Meccaniche' del topic con quelli del catalogo. Se c'è una forte sovrapposizione tra alcuni giochi nel catalogo e quello della recensione (es. entrambi sono 'Survival Horror' o usano 'Stealth') o appartengono allo stesso ramo di genere/sviluppatore (o alla stessa serie/saga/franchise), aggiungi anche questi titoli all'array 'similar_games'.\n"
         "3. 🚨 REGOLA DELL'ARRAY VUOTO: Se nel catalogo non c'è NULLA di logicamente paragonabile per meccaniche o genere, devi TASSATIVAMENTE lasciare l'array 'similar_games' VUOTO []. Non inserire MAI i giochi citati nell'introduzione come saluti o recensioni passate. Meglio un array vuoto che un paragone falso."
         "🚨 REGOLA ONTOLOGICA SUI TITOLI: Distingui rigorosamente i NOMI PROPRI dei giochi (es. 'Bloodborne', 'Persona 5') dalle CATEGORIE DESCRITTIVE o GENERI. "
         "Termini come 'Soulslike', 'Action RPG', 'Social Link-Heavy Games', 'Open World' o 'Story-driven' sono generi o meccaniche, NON sono titoli di videogiochi! Se incontri una categoria descrittiva, ignorala o inseriscila nei 'Generi' o 'Meccaniche', MAI nei 'Giochi Simili'.\n"
@@ -827,7 +845,7 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
         f"ANGOLO ORIGINALE: '{plan_info.get('review_angle', 'Generico')}'\n"
         f"APPUNTI DI RICERCA:\n{research_summary}\n\n"
         f"RECENSIONE FINALE:\n{draft}\n\n"
-        f"CATALOGO DELLE SOMIGLIANZE (Usa Generi e Meccaniche per dedurre i link):\n{truncate_text(str(similarity_catalog), 15000)}\n\n"
+        f"CATALOGO DELLE SOMIGLIANZE (Usa Generi e Meccaniche per dedurre i collegamenti):\n{truncate_text(str(similarity_catalog), 15000)}\n\n"
         f"Estrai tutte le entità chiave per il database (Generi, Studi, Piattaforme, Anno, Boss, Meccaniche, Personaggi, Giochi Simili, Opinioni, Fonti)."
     )
 
@@ -879,15 +897,19 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
             "kg_manager.update()", "Fallito"
         ))
 
-    # Salva il draft approvato nel RAG (solo il draft, non ri-salva i tool_outputs)
+    # Salva il draft approvato nel RAG
     if draft.strip():
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP
         )
         chunks = splitter.split_text(draft)
-        documents = [
-            Document(
-                page_content=chunk,
+
+        documents = []
+        for i, chunk in enumerate(chunks):
+            enriched_chunk = f"Articolo del Blog su: {entities.main_topic}\nContenuto: {chunk}"
+
+            doc = Document(
+                page_content=enriched_chunk,
                 metadata={
                     "source_url": f"internal_blog/{entities.main_topic.replace(' ', '_').lower()}",
                     "source_name": entities.post_title,
@@ -897,8 +919,9 @@ def memory_updater_node(state: AgentState) -> Dict[str, Any]:
                     "total_chunks": len(chunks),
                 }
             )
-            for i, chunk in enumerate(chunks)
-        ]
+
+            documents.append(doc)
+
         added = rag_manager.add_documents(documents)
         reasoning.append(create_react_entry(
             "memory_updater", f"RAG aggiornato con {added} chunk del post approvato",

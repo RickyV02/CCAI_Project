@@ -9,9 +9,11 @@ from config import RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
 import re
 from bs4 import BeautifulSoup
 import trafilatura
+from ml_manager import MLEvaluator
 
 rag_manager = RAGManager()
 kg_manager = KGManager()
+quality_evaluator = MLEvaluator()
 
 
 @tool
@@ -29,6 +31,7 @@ def search_tool(query: str) -> str:
 
         all_documents = []
         sources_found = []
+        discarded_count = 0 # Contatore per le pagine scartate
 
         results_list = results.get("results", []) if isinstance(results, dict) else results
 
@@ -40,7 +43,7 @@ def search_tool(query: str) -> str:
                         raw,
                         include_comments=False,
                         include_tables=False,
-                        favor_precision=True
+                        favor_precision=False
                     )
                     if extracted_text:
                         content = extracted_text
@@ -66,14 +69,26 @@ def search_tool(query: str) -> str:
             if not content.strip():
                 continue
 
+            snippet_da_valutare = f"{title} | {content}"
+
+            # Chiediamo al modello se è spazzatura (0) o utile (1)
+            if not quality_evaluator.is_informative(snippet_da_valutare):
+                print(f"   [ML Filter] 🔴 SCARTATO (JUNK/STORE): {title} ({url})")
+                discarded_count += 1
+                continue # 🛑 SALTIAMO ALLA PROSSIMA ITERAZIONE, NON SALVIAMO NEL RAG!
+
+            print(f"   [ML Filter] 🟢 APPROVATO (INFORMATIVE): {title}")
+
+            # Se il modello ha approvato, procediamo a salvare nel RAG
             splitter = RecursiveCharacterTextSplitter(
                 chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP
             )
             chunks = splitter.split_text(content)
 
             for i, chunk in enumerate(chunks):
+                enriched_chunk = f"Argomento di riferimento: {query}\nContenuto: {chunk}"
                 doc = Document(
-                    page_content=chunk,
+                    page_content=enriched_chunk,
                     metadata={
                         "source_url": url,
                         "source_name": title,
@@ -90,7 +105,7 @@ def search_tool(query: str) -> str:
 
         added = rag_manager.add_documents(all_documents)
         sources_str = ", ".join(sources_found) if sources_found else "nessuna fonte trovata"
-        return f"Ricerca web completata. {added} chunk salvati da {len(sources_found)} fonti: {sources_str}. Usa 'rag_retrieval_tool' per leggere i dettagli."
+        return f"Ricerca web completata. {added} chunk salvati da {len(sources_found)} fonti: {sources_str}. Usa 'rag_retrieval_tool' per raccogliere informazioni, oppure 'deep_read_article' per leggere i dettagli di un articolo specifico."
 
     except Exception as e:
         return f"Errore durante la ricerca web: {e}"
@@ -108,14 +123,14 @@ def rag_retrieval_tool(query: str) -> str:
 
 
 @tool
-def knowledge_graph_tool(entity: str) -> str:
+def knowledge_graph_tool(entity_name: str) -> str:
     """
-    Interroga il database interno Knowledge Graph (Neo4j) per vedere se un argomento è già noto al blog.
+    Interroga il database interno Knowledge Graph (Neo4j) per estrarre tutti i dati noti su un videogioco (se presente).
 
     Args:
-        entity_name (str): Il nome specifico e preciso del soggetto da cercare (es. "Malenia", "Parry", "FromSoftware"). Inserisci SOLO il nome, senza preposizioni o frasi.
+        entity_name (str): Il NOME DEL GIOCO da cercare (es. "Elden Ring", "Silent Hill").
     """
-    return kg_manager.query(entity)
+    return kg_manager.query(entity_name)
 
 
 @tool
@@ -152,11 +167,12 @@ def deep_read_article(source_url: str, offset: int | str = 0, limit: int | str =
 
 
 @tool
-def youtube_transcript_fetcher(video_url: str) -> str:
+def youtube_transcript_fetcher(video_url: str, topic: str = "Videogioco") -> str:
     """Scarica la trascrizione completa di un video YouTube e la salva nel database vettoriale locale con metadata.
 
     Args:
         video_url (str): L'URL del video YouTube da cui estrarre la trascrizione (es. "https://www.youtube.com/watch?v=abc123").
+        topic (str): Il topic associato al video (es. "Elden Ring").
     """
     try:
         if "v=" in video_url:
@@ -167,31 +183,36 @@ def youtube_transcript_fetcher(video_url: str) -> str:
             return "Errore: URL YouTube non riconosciuto."
 
         ytt = YouTubeTranscriptApi()
-        transcript_data = ytt.fetch(video_id)
-        raw_text = " ".join([t.text for t in transcript_data])
+        fetched_transcript = ytt.fetch(video_id, languages=['it', 'en'])
+        transcript_data = fetched_transcript.to_raw_data()
+
+        raw_text = " ".join([t['text'] for t in transcript_data])
 
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP
         )
         chunks = splitter.split_text(raw_text)
 
-        documents = [
-            Document(
-                page_content=chunk,
+        documents = []
+        for i, chunk in enumerate(chunks):
+            enriched_chunk = f"Trascrizione video YouTube su: {topic}\nContenuto: {chunk}"
+
+            doc = Document(
+                page_content=enriched_chunk,
                 metadata={
                     "source_url": video_url,
                     "source_name": f"YouTube Video ({video_id})",
                     "source_type": "youtube",
+                    "topic": topic,
                     "chunk_index": i,
                     "total_chunks": len(chunks),
                 }
             )
-            for i, chunk in enumerate(chunks)
-        ]
+            documents.append(doc)
 
         added = rag_manager.add_documents(documents)
         word_count = len(raw_text.split())
-        return f"Trascrizione YouTube ({word_count} parole) salvata: {added} chunk. Usa 'rag_retrieval_tool' per leggere i dettagli."
+        return f"Trascrizione YouTube ({word_count} parole) salvata: {added} chunk. Usa 'deep_read_article' per leggere i dettagli."
 
     except Exception as e:
-        return f"Impossibile estrarre la trascrizione: {e}"
+        return f"ATTENZIONE: Impossibile estrarre la trascrizione per questo video. Potrebbe non avere i sottotitoli attivi. Usa il 'search_tool' per cercare un ALTRO URL di YouTube. Errore tecnico: {str(e)}"

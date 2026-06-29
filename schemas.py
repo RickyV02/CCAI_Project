@@ -157,7 +157,7 @@ class PostEntities(BaseModel):
     mechanics: list[str] = Field(default=[], description="Meccaniche di gioco menzionate")
     characters: list[str] = Field(default=[], description="Personaggi DEL VIDEOGIOCO. NON inserire MAI sviluppatori, direttori o persone reali, a meno che non siano personaggi del videogioco. Se una persona reale è menzionata come parte del gioco, inseriscila SOLO se è chiaramente identificata come personaggio del gioco. Altrimenti, non va inserita.")
     claims: list[str] = Field(default=[], description="1-3 affermazioni chiave o opinioni forti")
-    sources: list[str] = Field(default=[], description="URL o nomi delle fonti citate")
+    sources: list[str] = Field(default=[], description="NOMI delle fonti citate (es. 'IGN', 'Multiplayer.it', 'Everyeye', 'Youtube'). NON INSERIRE MAI URL COMPLETI, estrai solo il nome del brand o sito. Se il sito è un blog amatoriale o non ha un brand/nome chiaro, estrai semplicemente il dominio principale (es. 'blogstrano.it' o 'miosito.wordpress.com').")
     similar_games: list[str] = Field(
         default=[],
         description=(

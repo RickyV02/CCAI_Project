@@ -264,7 +264,7 @@ class KGManager:
             cypher_lines.append(f"FOREACH (x IN {json.dumps(claims)} | MERGE (claim:Claim {{text: x}}) MERGE (b)-[:CLAIMS]->(claim))")
 
         if sources:
-            cypher_lines.append(f"FOREACH (x IN {json.dumps(sources)} | MERGE (src:Source {{url: x}}) MERGE (b)-[:USED_SOURCE]->(src))")
+            cypher_lines.append(f"FOREACH (x IN {json.dumps(sources)} | MERGE (src:Source {{name: x}}) MERGE (b)-[:USED_SOURCE]->(src))")
 
         if similar_games:
             cypher_lines.append(f"FOREACH (x IN {json.dumps(similar_games)} | MERGE (sim:Game {{name: x}}) MERGE (g)-[:SIMILAR_TO]->(sim))")

@@ -12,7 +12,7 @@ CREATE CONSTRAINT genre_name IF NOT EXISTS FOR (g:Genre) REQUIRE g.name IS UNIQU
 CREATE CONSTRAINT studio_name IF NOT EXISTS FOR (s:Studio) REQUIRE s.name IS UNIQUE;
 CREATE CONSTRAINT platform_name IF NOT EXISTS FOR (p:Platform) REQUIRE p.name IS UNIQUE;
 CREATE CONSTRAINT blogpost_title IF NOT EXISTS FOR (b:BlogPost) REQUIRE b.title IS UNIQUE;
-CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE;
+CREATE CONSTRAINT source_name IF NOT EXISTS FOR (s:Source) REQUIRE s.name IS UNIQUE;
 
 // ==========================================
 // 2. NODI BASE: GENRES, STUDIOS, PLATFORMS, MECHANICS
@@ -202,8 +202,8 @@ MERGE (c1:Claim {text: "Elden Ring ha ridefinito il design open-world nei soulsl
 MATCH (p1:BlogPost {title:"Why Elden Ring Changed Open World Design"}), (c1:Claim {text:"Elden Ring ha ridefinito il design open-world nei soulslike."})
 MERGE (p1)-[:CLAIMS]->(c1);
 
-MERGE (s1:Source {url: "https://www.ign.com/articles/elden-ring-review"});
-MATCH (p1:BlogPost {title:"Why Elden Ring Changed Open World Design"}), (s1:Source {url:"https://www.ign.com/articles/elden-ring-review"})
+MERGE (s1:Source {name: "IGN"});
+MATCH (p1:BlogPost {title:"Why Elden Ring Changed Open World Design"}), (s1:Source {name:"IGN"})
 MERGE (p1)-[:USED_SOURCE]->(s1);
 
 // ==========================================
